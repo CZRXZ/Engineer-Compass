@@ -365,4 +365,66 @@ export const api = {
   expenseMemberPatch: (mid, body) => req(`/expense/member/${mid}`, { method: 'PATCH', body: JSON.stringify(body) }),
   expenseMemberDelete: (mid) => req(`/expense/member/${mid}`, { method: 'DELETE' }),
   expenseMemberReset: (mid) => req(`/expense/member/${mid}/reset-claim`, { method: 'POST' }),
+  // ==================== 物料采购（/purchase，登录制）====================
+  // 身份三层：学生本人 / 按档案指定的负责人·老师（purchase_event_approver）/ 管理员
+  purchaseEvents: () => req('/purchase/events'),
+  purchaseEventCreate: (b) => req('/purchase/events', { method: 'POST', body: JSON.stringify(b) }),
+  purchaseEventUpdate: (id, b) => req(`/purchase/events/${id}`, { method: 'PUT', body: JSON.stringify(b) }),
+  purchaseApprovers: (id) => req(`/purchase/events/${id}/approvers`),
+  purchaseApproverAdd: (id, userId, role) => req(`/purchase/events/${id}/approvers`, { method: 'POST', body: JSON.stringify({ user_id: userId, role }) }),
+  purchaseApproverRemove: (id, userId) => req(`/purchase/events/${id}/approvers/${userId}`, { method: 'DELETE' }),
+  purchaseUserSearch: (q, eventId) => req(`/purchase/users/search${qs({ q, event_id: eventId || undefined })}`),
+  purchaseRequests: (params) => req(`/purchase/requests${qs(params)}`),
+  purchaseRequestCreate: (b) => req('/purchase/requests', { method: 'POST', body: JSON.stringify(b) }),
+  purchaseRequestDetail: (id) => req(`/purchase/requests/${id}`),
+  purchaseRequestUpdate: (id, b) => req(`/purchase/requests/${id}`, { method: 'PUT', body: JSON.stringify(b) }),
+  purchaseRequestDelete: (id) => req(`/purchase/requests/${id}`, { method: 'DELETE' }),
+  purchaseApprove: (id, comment = '') => req(`/purchase/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  purchaseReject: (id, reason) => req(`/purchase/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  // 附件：FormData 不设 Content-Type（浏览器补 boundary），显式带 Authorization（同 resourceUpload）
+  purchaseShotUpload: (rid, iid, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const token = localStorage.getItem('ec_token');
+    return req(`/purchase/requests/${rid}/items/${iid}/shot`, { method: 'POST', body: fd, headers: token ? { Authorization: `Bearer ${token}` } : {} }, 120000);
+  },
+  purchaseInvoiceUpload: (rid, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const token = localStorage.getItem('ec_token');
+    return req(`/purchase/requests/${rid}/invoices`, { method: 'POST', body: fd, headers: token ? { Authorization: `Bearer ${token}` } : {} }, 120000);
+  },
+  purchaseFileDelete: (fid) => req(`/purchase/files/${fid}`, { method: 'DELETE' }),
+  // BOM 表识别（Excel/CSV/PDF/图片 → 预填明细，不落库）；视觉模型慢，120s
+  purchaseRecognizeBom: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const token = localStorage.getItem('ec_token');
+    return req('/purchase/recognize-bom', { method: 'POST', body: fd, headers: token ? { Authorization: `Bearer ${token}` } : {} }, VISION_TIMEOUT);
+  },
+  purchaseStats: (params) => req(`/purchase/stats${qs(params)}`),
+  // 文件预览必须走 blob（token 绝不进 URL）：图片交 ImageViewer，PDF 用 objectURL 新开页
+  purchaseFileBlob: async (fid) => {
+    const token = localStorage.getItem('ec_token');
+    const res = await fetch(`${BASE}/purchase/files/${fid}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || `读取失败（${res.status}）`);
+    }
+    return res.blob();
+  },
+  // 导出 Excel：同样走 blob；文件名取响应头 filename*（UTF-8）
+  purchaseExportBlob: async (params) => {
+    const token = localStorage.getItem('ec_token');
+    const res = await fetch(`${BASE}/purchase/export.xlsx${qs(params)}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || `导出失败（${res.status}）`);
+    }
+    let name = `物料采购_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const cd = res.headers.get('content-disposition') || '';
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    if (star) { try { name = decodeURIComponent(star[1]); } catch { /* 用默认名 */ } }
+    return { blob: await res.blob(), name };
+  },
 };

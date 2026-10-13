@@ -578,3 +578,98 @@ CREATE TABLE IF NOT EXISTS honor (
   update_time DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_honor_show ON honor(is_active, sort_order, id);
+
+-- ========== 物料采购申请模块（2026-10-14，/purchase） ==========
+
+-- 表45 物料采购·比赛/项目档案（审批按档案分别指定负责人/老师；建档者自动成为 leader）
+-- 档案只能关闭（status=closed）不能删除：有申请挂着时 ON DELETE RESTRICT 兜底
+CREATE TABLE IF NOT EXISTS purchase_event (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL UNIQUE,             -- 比赛或项目名称（全局唯一，防重复建档）
+  kind        TEXT NOT NULL DEFAULT '比赛',      -- 比赛 / 项目
+  description TEXT DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'open',     -- open 接受申请 / closed 已关闭（学生不可新建申请）
+  created_by  INTEGER REFERENCES user(id) ON DELETE SET NULL,
+  create_time TEXT DEFAULT (datetime('now','localtime')),
+  close_time  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_event_status ON purchase_event(status);
+
+-- 表46 档案审批人（负责人 leader / 老师 teacher；任一审批人通过即生效，不做会签）
+CREATE TABLE IF NOT EXISTS purchase_event_approver (
+  event_id    INTEGER NOT NULL REFERENCES purchase_event(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  role        TEXT NOT NULL DEFAULT 'leader',   -- leader / teacher
+  add_by      INTEGER,
+  create_time TEXT DEFAULT (datetime('now','localtime')),
+  PRIMARY KEY (event_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_approver_user ON purchase_event_approver(user_id);
+
+-- 表47 物料采购·申请单（状态机 pending 待审批 → approved 已通过·待传发票 → invoiced 已传发票；
+--   pending → rejected 已驳回；rejected 申请人改后重新提交回 pending；发票删光 invoiced 退回 approved）
+CREATE TABLE IF NOT EXISTS purchase_request (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id       INTEGER NOT NULL REFERENCES purchase_event(id) ON DELETE RESTRICT,
+  user_id        INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  applicant_name TEXT NOT NULL,                  -- 申请人昵称快照（防改名后历史失真）
+  remark         TEXT DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'pending',
+  amount         REAL NOT NULL DEFAULT 0,        -- 明细总额（服务端重算：Σ qty*unit_price，四舍五入到分）
+  approver_id    INTEGER,                        -- 当前裁决审批人
+  approver_name  TEXT DEFAULT '',
+  approver_role  TEXT DEFAULT '',                -- leader / teacher
+  approve_time   TEXT,
+  reject_reason  TEXT DEFAULT '',
+  invoice_count  INTEGER NOT NULL DEFAULT 0,
+  submit_time    TEXT DEFAULT (datetime('now','localtime')),
+  create_time    TEXT DEFAULT (datetime('now','localtime')),
+  update_time    TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_request_event ON purchase_request(event_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_request_user ON purchase_request(user_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_request_status ON purchase_request(status);
+
+-- 表48 物料采购·明细行（申请单编辑走全量替换；amount 服务端算）
+CREATE TABLE IF NOT EXISTS purchase_item (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id  INTEGER NOT NULL REFERENCES purchase_request(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,                     -- 物料/道具详细名称
+  spec        TEXT DEFAULT '',                   -- 规格型号
+  qty         REAL NOT NULL DEFAULT 1,
+  unit_price  REAL NOT NULL DEFAULT 0,
+  amount      REAL NOT NULL DEFAULT 0,
+  link        TEXT DEFAULT '',                   -- 购买链接（可选）
+  ord         INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_item_request ON purchase_item(request_id);
+
+-- 表49 物料采购·附件（kind=shot 购买截图挂 item_id；kind=invoice 发票挂申请单 item_id NULL）
+-- 文件落盘 backend/uploads/purchase/{requestId}/{shots|invoices}/，DB 只存元数据
+CREATE TABLE IF NOT EXISTS purchase_file (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id  INTEGER NOT NULL REFERENCES purchase_request(id) ON DELETE CASCADE,
+  item_id     INTEGER REFERENCES purchase_item(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,                     -- shot / invoice
+  orig_name   TEXT NOT NULL,
+  store_name  TEXT NOT NULL,                     -- 仅 basename，防穿越
+  mime        TEXT DEFAULT '',                   -- 按扩展名映射的规范 mime（不信客户端）
+  size        INTEGER NOT NULL,
+  uploader_id INTEGER,
+  create_time TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_file_request ON purchase_file(request_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_file_item ON purchase_file(item_id);
+
+-- 表50 物料采购·审批轨迹（每次通过/驳回一条；驳回后重新提交再审批，历史全保留）
+CREATE TABLE IF NOT EXISTS purchase_approval_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id    INTEGER NOT NULL REFERENCES purchase_request(id) ON DELETE CASCADE,
+  user_id       INTEGER,
+  approver_name TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'leader',  -- leader / teacher
+  result        TEXT NOT NULL,                   -- approved / rejected
+  comment       TEXT DEFAULT '',
+  create_time   TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_log_request ON purchase_approval_log(request_id);

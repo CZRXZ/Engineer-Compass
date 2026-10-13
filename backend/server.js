@@ -25,6 +25,7 @@ import resource, { publicR } from './routes/resource.js';
 import importPlan from './routes/importPlan.js';
 import feishu from './routes/feishu.js';
 import expense from './routes/expense.js';
+import purchase from './routes/purchase.js';
 import honor, { adminR as adminHonor } from './routes/honor.js';
 import { hasSMTP } from './routes/mailer.js';
 import { accessLog } from './routes/middleware.js';
@@ -66,6 +67,7 @@ app.use('/api/resource', resource);
 app.use('/api/import', importPlan);
 app.use('/api/feishu', feishu);
 app.use('/api/expense', expense);
+app.use('/api/purchase', purchase); // 物料采购申请（登录制：学生申请/负责人·老师按档案审批/发票上传）
 // 飞书互传工作台页面（独立静态工具页，不参与业务）
 app.use(express.static('public'));
 

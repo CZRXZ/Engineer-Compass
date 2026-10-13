@@ -417,3 +417,15 @@ YOLOv8 训练识别 16 类物品：青椒、白菜、黄瓜、豆腐、茄子、
 - **★ dock 只在有数据时渲染**（在 `v-else` 的 `<template>` 内），空态/加载/出错时不出现；滚动提示 `.e-cue` 因与 dock 相挤从 `bottom:18` 上移到 `bottom:84`（在 dock 上方）
 - **探针同步（`probe_honor.mjs`，81→84）**：主页面先断言 3 条精选口径（②⓪ `.ecard` 数=nPub / ②⓪② 图解码 / ②⓪③ dock 默认高亮「精选」），再 **click「流动」waitFor .marquee visible** 才跑原来整套跑马灯断言；窄屏(②㉒前)、降级(②㉕前)两处同样先切 flow。新增3条+原81=**84/84**；判别力靠那3条守着「默认是 editorial」
 - **验证**：`probe_honor` **84/84**；`vite build` 通过；9 条金/银/铜真实感数据对 桌面浅色/暗色/375px 截图人工过目（大留白居中、软阴影相框、近黑暗色红按钮、375px dock 不溢出）；临时脚本/截图/端口3106·5198/临时库均已清理
+
+## 2026-10-14 🛒 物料采购模块（/purchase）：申请-审批-发票闭环 + BOM 识别 + 四维导出
+
+- **需求 7 条**（学生填明细/截图、按日期或比赛导出、BOM 识别自动填表、负责人+老师均可审批、通过后必须传发票、个人申请与金额统计、整体/个人/项目三维金额统计）。决策（AskUserQuestion 全确认）：**审批人按比赛/项目分别指定**（桥表 `purchase_event_approver`，不动 user 表）；**BOM 四格式全支持**（Excel/CSV/PDF/图片）；驳回后**可修改重提、轨迹保留**；发票**通过后必传、可多张、删光退回「待传发票」**；**任何登录用户可建档、建档者自动 leader**；登录制（不学报销那套免登录认领）；**任一审批人通过即生效、不能审自己**（admin 可）；档案**只关闭不删除**（FK RESTRICT）
+- **数据模型 6 张新表（45~50，全部 IF NOT EXISTS 零迁移）**：`purchase_event`（UNIQUE name、kind 比赛/项目、open/closed）、`purchase_event_approver`（PK(event,user)、role leader/teacher）、`purchase_request`（status **pending/approved/invoiced/rejected**、金额服务端重算、invoice_count）、`purchase_item`、`purchase_file`（kind shot/invoice 统一表）、`purchase_approval_log`
+- **后端** `routes/purchase.js`（整路由 authRequired，736 行）+ `lib/purchaseFiles.js`（落盘 `uploads/purchase/{rid}/shots|invoices/`，撤回/删行集中清盘）+ `lib/bomVision.js`（xlsx/csv 表头启发式 + GBK 回落 + 合计行跳过；PDF 走 pdf-text→GLM-OCR→视觉三级管线，图片 GLM-4.6V，看不清宁空不编）+ `lib/purchaseExcel.js`（**4 sheet**：物料明细/按比赛项目汇总/个人汇总/审批轨迹，末行 `=SUM` 公式、cellSafe 防注入、RFC5987 filename*）。GET 单条返 `{detail}`（列表是 `{requests}`、stats 直接返对象）——前端解包别搞混
+- **★ SheetJS 公式坑（复用前必看）**：公式单元格必须写 **`f: '=SUM(I2:I6)'` 带前导等号**（漏了会生成 `<f>SUM(...)</f>` Excel 报损坏）；防注入前缀的单引号在 xlsx 里被 XML 转义成 `&apos;=cmd`，断言要找转义后的串
+- **前端三件** `components/purchase/`：PurchaseView（5 张顶部统计卡 + chip 四 tab：我的申请/审批工作台/金额统计(ECharts 柱)/比赛·项目管理；导出条；≤768 表格降卡片）、RequestFormDialog（手填行 + **BOM 结果只追加不清空** + 每行一截图；带 id 的旧行 PUT 时保留截图，提交后按序补传 pending 截图）、RequestDetailDialog（明细/el-timeline 轨迹/发票区/审批 prompt 必填驳回原因）
+- **★ 前端两个本轮坑**：① **异步拉 blob 后要驱动重渲染，缓存 Map 必须 `reactive(new Map())`**（普通 Map 里 set 不触发更新，旧截图缩略图静默不显示）；② `@element-plus/icons-vue` 只是 element-plus 的**间接依赖**（package.json 没声明），新组件不要 import 它，加载态用 CSS 自画 spinner
+- **测试**：`scripts/smoke_purchase.mjs`（API 全链 **102/102**；xlsx 走 createRequire 够 backend/node_modules，GBK fixture 用 iconv-lite；「最后一个 leader」状态靠直连临时库 DELETE 造）；`scripts/probe_purchase_ui.mjs`（**自起临时后端(3108)+vite(5199, VITE_API_TARGET) 的 Playwright 全链 29/29**：闸门→手填+BOM+截图→老师驳回→改价重提（旧截图 blob 回填）→负责人通过→两张发票删一张→统计表/图表/导出 xlsx/审批人管理/390px；只清 uploads/purchase 本次新增目录）
+- **探针经验**：Playwright 里 **MessageBox.prompt 的输入框是 `.el-message-box textarea`，没有 `.el-message-box__textarea` 这个类**；`innerText` 读不到 input.value（断言回填要 `evaluateAll(e=>e.value)`）；AuthView 默认 tab 是邮箱验证码（密码框在隐藏 tab 里，别拿它当登录闸门探针）；弹窗作用域用 `.el-dialog:visible`（全局 ImageViewer 也产 .el-overlay，拿 `.el-overlay` last 会选错）
+- **验证**：smoke 102/102 + UI 探针 29/29 + `vite build` 通过 + 390px 截图人工过目；npm 脚本 `smoke:purchase` / `probe:purchase-ui`

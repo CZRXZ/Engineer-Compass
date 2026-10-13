@@ -9,6 +9,7 @@ import ShareView from './components/ShareView.vue';
 import SharePostView from './components/SharePostView.vue';
 import ExpenseView from './components/ExpenseView.vue';
 import ExpenseGuide from './components/ExpenseGuide.vue';
+import PurchaseView from './components/purchase/PurchaseView.vue';
 import HonorView from './components/HonorView.vue';
 import MyView from './components/MyView.vue';
 import ProfileView from './components/ProfileView.vue';
@@ -76,6 +77,8 @@ const router = createRouter({
     { path: '/expense', name: 'expense', component: ExpenseView },
     // 报销整理使用教程（静态文档页，任何人可看）
     { path: '/expense/guide', name: 'expense-guide', component: ExpenseGuide },
+    // 物料采购：学生申请/负责人·老师按档案审批/发票上传（登录制）
+    { path: '/purchase', name: 'purchase', component: PurchaseView },
     // 荣誉墙（公开免登录；内容由管理员在后台维护。复数路径只做重定向，全站单数口径）
     { path: '/honor', name: 'honor', component: HonorView },
     { path: '/honors', redirect: '/honor' },
