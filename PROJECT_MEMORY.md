@@ -429,3 +429,11 @@ YOLOv8 训练识别 16 类物品：青椒、白菜、黄瓜、豆腐、茄子、
 - **测试**：`scripts/smoke_purchase.mjs`（API 全链 **102/102**；xlsx 走 createRequire 够 backend/node_modules，GBK fixture 用 iconv-lite；「最后一个 leader」状态靠直连临时库 DELETE 造）；`scripts/probe_purchase_ui.mjs`（**自起临时后端(3108)+vite(5199, VITE_API_TARGET) 的 Playwright 全链 29/29**：闸门→手填+BOM+截图→老师驳回→改价重提（旧截图 blob 回填）→负责人通过→两张发票删一张→统计表/图表/导出 xlsx/审批人管理/390px；只清 uploads/purchase 本次新增目录）
 - **探针经验**：Playwright 里 **MessageBox.prompt 的输入框是 `.el-message-box textarea`，没有 `.el-message-box__textarea` 这个类**；`innerText` 读不到 input.value（断言回填要 `evaluateAll(e=>e.value)`）；AuthView 默认 tab 是邮箱验证码（密码框在隐藏 tab 里，别拿它当登录闸门探针）；弹窗作用域用 `.el-dialog:visible`（全局 ImageViewer 也产 .el-overlay，拿 `.el-overlay` last 会选错）
 - **验证**：smoke 102/102 + UI 探针 29/29 + `vite build` 通过 + 390px 截图人工过目；npm 脚本 `smoke:purchase` / `probe:purchase-ui`
+
+## 2026-10-14 定期清理 + 失安全护栏（用户口径：**15 天一轮**）
+
+- **需求**：「定期自动清理后台缓存」→ 间隔定为 **15 天**（`CLEANUP_INTERVAL_HOURS` 默认 `15*24=360`，env 可调）；启动时三段清理照跑，setInterval 只补「长期不重启」空窗；非重入（cleanupRunning）、单项 try/catch、`timer.unref()`
+- **三类清理**：`sweepStaging`（分享暂存，**只删 DB 有暂存行的盘文件，天然防错配**）、`sweepOrphanHonorFiles`、`sweepOrphanPurchaseFiles`（后两者是磁盘↔DB 对账型孤儿清理，24h 宽限）
+- **★★ 失安全三护栏（用户「确保关键数据不会丢失」后加固，原则：不确定归属一律保留）**：① 清理根 = 文件系统根（`PURCHASE_UPLOAD_DIR='D:\'` 错配）直接 return；② **DB 里 0 条申请/honor 0 配图行，但盘上有目录/文件 → 疑似 DB_PATH 指到空库·临时库，整轮跳过并 console.error 告警**（这是真实风险：跑临时冒烟只给 DB_PATH 不给 PURCHASE_UPLOAD_DIR 就会对账真实附件；本机因 uploads/purchase 为空才没出事）；DB 查询抛错同样跳过；③ 采购按申请目录逐个 try/catch，单目录失败只跳过
+- **新增 env**：`PURCHASE_UPLOAD_DIR` / `HONOR_UPLOAD_DIR`（上传根可覆盖，部署/隔离测试）；模块加载的 mkdirSync 要 try/catch——Windows 对盘符根 recursive mkdir 直接 EPERM，会让整个服务启动崩
+- **回归** `scripts/sweep_safety_check.mjs`（npm `smoke:sweep-safety`，自起 mkdtemp 沙盒 + 多子进程换 env，**15/15**）：关键断言是「空库 + 含 3 天前有主文件的目录 → 删除 0、清单逐一不变」（有主文件故意做成旧的，否则 24h 宽限会替护栏兜底，证明不了护栏）；`smoke_purchase.mjs` 加 `SMK_PURCHASE_DIR` 对齐服务端重定向（102/102 回归通过）

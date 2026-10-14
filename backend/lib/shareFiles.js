@@ -16,7 +16,8 @@ import db from '../db/database.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export const SHARE_DIR = join(__dirname, '..', 'uploads', 'share');
+// 上传根目录：默认 backend/uploads/share；冒烟/隔离部署可用 SHARE_UPLOAD_DIR 覆盖（同 honor/purchase）
+export const SHARE_DIR = process.env.SHARE_UPLOAD_DIR || join(__dirname, '..', 'uploads', 'share');
 
 // 额度：单帖文件夹 200MB / 单用户 2GB / 单文件 30MB / 单请求 10 个文件
 // （客户端按目录递归、分批 multipart 上传；服务端每次请求都独立校验）

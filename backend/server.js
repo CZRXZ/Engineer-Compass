@@ -31,6 +31,7 @@ import { hasSMTP } from './routes/mailer.js';
 import { accessLog } from './routes/middleware.js';
 import { sweepStaging } from './lib/shareFiles.js';
 import { sweepOrphanHonorFiles } from './lib/honorFiles.js';
+import { sweepOrphanPurchaseFiles } from './lib/purchaseFiles.js';
 
 // 加载 .env（Node 24 内置）；mailer 配置为惰性读取（调用时读 process.env），加载顺序无影响
 if (existsSync('.env')) process.loadEnvFile('.env');
@@ -107,6 +108,36 @@ try {
   const n = sweepOrphanHonorFiles();
   if (n) console.log(`🧹 已清理 ${n} 张无主的荣誉墙奖状图`);
 } catch (e) { console.error('荣誉墙清理失败（不影响启动）:', e.message); }
+
+// 物料采购无主附件（multer 落盘后写库失败/进程被杀的残留；24h 宽限）
+try {
+  const n = sweepOrphanPurchaseFiles();
+  if (n) console.log(`🧹 已清理 ${n} 个无主的采购附件`);
+} catch (e) { console.error('采购附件清理失败（不影响启动）:', e.message); }
+
+// 定期自动清理：三类无主/暂存文件，默认每 15 天一轮（CLEANUP_INTERVAL_HOURS 可调，单位小时）。
+// 定时只在运行期补上「长期不重启」的空窗——启动时上面三段仍会先跑一遍。
+const CLEANUP_INTERVAL_HOURS = Number(process.env.CLEANUP_INTERVAL_HOURS) || 15 * 24;
+let cleanupRunning = false;
+function runPeriodicCleanup() {
+  if (cleanupRunning) return; // 上一轮没跑完不重入
+  cleanupRunning = true;
+  const tasks = [
+    ['分享暂存文件', sweepStaging],
+    ['荣誉墙无主图', sweepOrphanHonorFiles],
+    ['采购无主附件', sweepOrphanPurchaseFiles],
+  ];
+  (async () => {
+    for (const [label, fn] of tasks) {
+      try {
+        const n = fn();
+        if (n) console.log(`🧹 定时清理：${label} ${n} 个（${new Date().toLocaleString('zh-CN')}）`);
+      } catch (e) { console.error(`定时清理失败（${label}，不影响服务）:`, e.message); }
+    }
+  })().finally(() => { cleanupRunning = false; });
+}
+const cleanupTimer = setInterval(runPeriodicCleanup, CLEANUP_INTERVAL_HOURS * 3600 * 1000);
+cleanupTimer.unref(); // 不拖住进程退出
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

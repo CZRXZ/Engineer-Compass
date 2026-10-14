@@ -20,9 +20,14 @@ import { unlinkQuiet } from './shareFiles.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export const HONOR_DIR = join(__dirname, '..', 'uploads', 'honor');
+// 默认 uploads/honor；HONOR_UPLOAD_DIR 可覆盖（部署/隔离测试用）
+export const HONOR_DIR = process.env.HONOR_UPLOAD_DIR
+  ? join(process.env.HONOR_UPLOAD_DIR)
+  : join(__dirname, '..', 'uploads', 'honor');
 // 启动即建：uploads/ 被 gitignore，生产首次部署目录不存在，不建则第一张图 ENOENT
-mkdirSync(HONOR_DIR, { recursive: true });
+// 容错：HONOR_UPLOAD_DIR 错配不能让整个服务启动崩溃
+try { mkdirSync(HONOR_DIR, { recursive: true }); }
+catch (e) { console.error(`⚠️ HONOR_UPLOAD_DIR 不可用（${HONOR_DIR}）：${e.message}，荣誉墙图片上传会失败，请检查配置`); }
 
 export const MAX_IMAGE = 8 * 1024 * 1024;                                    // 单张兜底（前端已压到 ~300KB）
 export const BULK_MAX = 20;                                                  // 批量一次最多 20 张
@@ -103,12 +108,29 @@ export function purgeHonor(row) {
 
 // 兜「已落盘但写库失败」的孤儿文件（配额校验不过、进程被杀在中间）。
 // 判据：文件不在 DB 的 store_name 集合里 + mtime 超过宽限期 —— 只靠前者会误删正在上传的临时文件。
+// 失安全：DB 不可用、或 DB 零配图行而盘上有文件（疑似 DB_PATH 错配到空库）时整轮跳过，宁留勿删。
 export function sweepOrphanHonorFiles(hours = 24) {
   let names;
   try { names = readdirSync(HONOR_DIR); } catch { return 0; }
-  const known = new Set(
-    db.prepare('SELECT store_name FROM honor WHERE store_name IS NOT NULL').all().map((r) => r.store_name)
-  );
+  let rows;
+  try {
+    rows = db.prepare('SELECT store_name FROM honor WHERE store_name IS NOT NULL').all();
+  } catch (e) {
+    console.error('⚠️ 荣誉墙清理：数据库不可用，本轮跳过：', e.message);
+    return 0;
+  }
+  if (!rows.length) {
+    let fileCount = 0;
+    for (const name of names) {
+      try { if (statSync(join(HONOR_DIR, name)).isFile()) fileCount++; } catch { /* 忽略 */ }
+    }
+    if (fileCount > 0) {
+      console.error(`⚠️ 荣誉墙清理：数据库无任何配图记录，但目录下有 ${fileCount} 个文件（${HONOR_DIR}），`
+        + '疑似 DB_PATH 错配，本轮全部保留不删');
+      return 0;
+    }
+  }
+  const known = new Set(rows.map((r) => r.store_name));
   const cut = Date.now() - hours * 3600 * 1000;
   let n = 0;
   for (const name of names) {

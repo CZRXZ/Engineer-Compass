@@ -20,7 +20,10 @@ const XLSX = require('../backend/node_modules/xlsx');
 const iconv = require('../backend/node_modules/iconv-lite');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PURCHASE_UP = join(__dirname, '..', 'backend', 'uploads', 'purchase');
+// 默认指向真实开发目录；服务端以 PURCHASE_UPLOAD_DIR 隔离运行时，冒烟侧用 SMK_PURCHASE_DIR 对齐
+const PURCHASE_UP = process.env.SMK_PURCHASE_DIR
+  ? join(process.env.SMK_PURCHASE_DIR)
+  : join(__dirname, '..', 'backend', 'uploads', 'purchase');
 
 const BASE = process.env.PROBE_API || DEFAULT_API;
 
