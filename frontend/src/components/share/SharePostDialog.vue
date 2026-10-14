@@ -27,7 +27,7 @@ const emit = defineEmits(['update:modelValue', 'changed']);
 // 那种关闭后再次打开不重置表单的经典错位。打开瞬间初始化表单即可。
 watch(() => props.modelValue, (v) => { if (v) init(); });
 
-const form = ref({ title: '', content: '', atts: [], tags: [], files: [], giteeRepo: '', giteeRef: '', isGhost: true }); // isGhost：幽灵用户发帖默认「仅怪奇可见」
+const form = ref({ title: '', content: '', atts: [], tags: [], files: [], giteeRepo: '', giteeRef: '', isGhost: true, isPublic: true }); // isGhost：幽灵用户发帖默认「仅怪奇可见」；isPublic：新项目默认开源
 const editingId = ref(null);
 const fileInput = ref(null);
 const MAX_ATT_TOTAL = 25 * 1024 * 1024;
@@ -62,12 +62,14 @@ function init() {
       giteeRepo: props.editing.gitee_repo || '',
       giteeRef: props.editing.gitee_ref || '',
       isGhost: true,
+      // 详情/列表行都带 is_public；老数据缺省按开源（与服务端默认一致）
+      isPublic: props.editing.is_public !== 0,
     };
   } else {
     editingId.value = null;
     filesKnown.value = true;
     giteeKnown.value = true;
-    form.value = { title: '', content: '', atts: [], tags: [], files: [], giteeRepo: '', giteeRef: '', isGhost: true };
+    form.value = { title: '', content: '', atts: [], tags: [], files: [], giteeRepo: '', giteeRef: '', isGhost: true, isPublic: true };
   }
 }
 
@@ -200,13 +202,15 @@ async function submit() {
   const giteeArg = giteeKnown.value ? { gitee_repo: form.value.giteeRepo.trim(), gitee_ref: form.value.giteeRef.trim() } : {};
   try {
     let res;
+    // 开源/私密：幽灵页不显示该开关（is_ghost 闸门优先），新建时不发、走服务端默认开源
+    const visArg = props.ghost ? {} : { is_public: form.value.isPublic ? 1 : 0 };
     if (wasEditing) {
-      res = await api.shareUpdate(editingId.value, { title: form.value.title, content: form.value.content, attachments: form.value.atts, tags: form.value.tags, files: fileArg, ...giteeArg });
+      res = await api.shareUpdate(editingId.value, { title: form.value.title, content: form.value.content, attachments: form.value.atts, tags: form.value.tags, files: fileArg, ...visArg, ...giteeArg });
       ElMessage.success('帖子已更新');
     } else {
       // 幽灵帖归属：秘密分享页恒为幽灵帖；普通页幽灵用户由「仅怪奇可见」勾选决定；普通用户恒普通帖
       const isGhost = props.ghost ? 1 : (auth.user?.is_ghost ? (form.value.isGhost ? 1 : 0) : 0);
-      res = await api.shareCreate({ title: form.value.title, content: form.value.content, attachments: form.value.atts, tags: form.value.tags, files: fileArg, is_ghost: isGhost, ...giteeArg });
+      res = await api.shareCreate({ title: form.value.title, content: form.value.content, attachments: form.value.atts, tags: form.value.tags, files: fileArg, is_ghost: isGhost, ...visArg, ...giteeArg });
       editingId.value = res.id;
       ElMessage.success(props.ghost ? '👻 秘密帖子发布成功' : '🚀 开楼成功');
     }
@@ -355,6 +359,14 @@ function onImported(html, id) {
       placeholder="索引标签（≤5 个，自建即成为子板块）" class="sh-tags">
       <el-option v-for="t in tagList" :key="t.name" :value="t.name" :label="`#${t.name}`" />
     </el-select>
+    <!-- 开源/私密：GitHub 风项目可见性。私密项目仅本人与管理员可见（链接外发别人也 404） -->
+    <div v-if="!ghost" class="sh-vis">
+      <el-radio-group v-model="form.isPublic" size="small">
+        <el-radio-button :value="true">🌍 开源（任何人可见项目链接）</el-radio-button>
+        <el-radio-button :value="false">🔒 私密（仅自己可见）</el-radio-button>
+      </el-radio-group>
+      <span class="sh-vis-hint">私密项目会从他人的大厅、收藏与用户主页消失</span>
+    </div>
     <!-- 幽灵用户发帖归属（秘密分享页恒为幽灵帖，无需勾选） -->
     <el-checkbox v-if="!ghost && auth.user?.is_ghost" v-model="form.isGhost" class="sh-ghost-chk">
       👻 仅怪奇可见（幽灵帖，普通用户看不到）
@@ -384,6 +396,8 @@ function onImported(html, id) {
   }
 }
 .sh-tags { width: 100%; margin-top: 10px; }
+.sh-vis { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.sh-vis-hint { font-size: 12px; color: var(--text-3); }
 .sh-ghost-chk { margin: 8px 0 2px; font-size: 13px; color: var(--primary); }
 
 // —— 项目文件夹清单 ——

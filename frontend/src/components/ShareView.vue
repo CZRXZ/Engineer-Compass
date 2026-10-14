@@ -20,8 +20,8 @@ const props = defineProps({ ghost: { type: Boolean, default: false } });
 
 // —— 视图：标签页 + 排序 + 标签子板块 + 分页 ——
 const TABS = [
-  { key: 'all', full: '📄 资源', short: '资源' },
-  { key: 'mine', full: '📝 我的帖子', short: '帖子' },
+  { key: 'all', full: '🌍 全部开源', short: '开源' },
+  { key: 'mine', full: '📝 我的', short: '我的' },
   { key: 'favs', full: '⭐ 我的收藏', short: '收藏' },
 ];
 const SORTS = [
@@ -100,9 +100,33 @@ const needLogin = () => {
   return true;
 };
 
-// 点行 → 独立详情子路由。URL 才是选中态的载体，列表自己不再持有「当前帖」这份数据副本。
+// 点行 → GitHub 风真实路由 /:username/:slug（幽灵页保留数字 /ghost-share/:id）。
+// slug 行内已带；万一老接口行里缺字段，退回数字链路由重定向组件兜底。
+function projectHref(p) {
+  if (props.ghost) return `/ghost-share/${p.id}`;
+  if (p.username && p.slug) return `/${encodeURIComponent(p.username)}/${encodeURIComponent(p.slug)}`;
+  return `/share/${p.id}`;
+}
 function pickRow(id) {
-  router.push(`${props.ghost ? '/ghost-share' : '/share'}/${id}`);
+  const p = rows.value.find((x) => x.id === id);
+  router.push(p ? projectHref(p) : `/share/${id}`);
+}
+// 作者名 → 用户项目主页 /:username
+function pickAuthor(p) {
+  if (p?.username) router.push(`/${encodeURIComponent(p.username)}`);
+}
+
+// 「我的」视图行内开源/私密开关：乐观更新 + 失败回滚（服务端有 canEdit 鉴权）
+async function toggleVisibility(p, open) {
+  const prev = p.is_public;
+  p.is_public = open ? 1 : 0;
+  try {
+    await api.shareVisibility(p.id, open ? 1 : 0);
+    ElMessage.success(open ? '已设为开源项目' : '已转为私密项目');
+  } catch (e) {
+    p.is_public = prev; // 回滚开关，避免 UI 与库不一致
+    ElMessage.error(e.message);
+  }
 }
 
 // 老链接兼容：?post=ID（消息通知、我的帖子/收藏、历史书签、以及改版前存下的 URL）一律改写成详情子路由。
@@ -163,12 +187,12 @@ onMounted(() => { load(); loadTags(); });
     <header class="gh-repohead">
       <div class="gh-crumb">
         <GhIcon name="book" :size="16" />
-        <span class="gh-owner">Engineer-Compass</span>
+        <router-link class="gh-owner" to="/">Engineer-Compass</router-link>
         <span class="gh-sep">/</span>
-        <b>{{ props.ghost ? '秘密分享' : '资源分享' }}</b>
-        <span class="gh-vis">{{ props.ghost ? '🔒 仅怪奇可见' : '公开' }}</span>
+        <b>{{ props.ghost ? '秘密分享' : '开源资料' }}</b>
+        <span class="gh-vis">{{ props.ghost ? '🔒 仅怪奇可见' : '大厅' }}</span>
       </div>
-      <p class="gh-desc">{{ props.ghost ? '怪奇小队专属领地：幽灵帖仅幽灵可见，普通世界完全无痕' : '贴吧式交流区：分享资料/经验/作品，图文视频音频文件' }}</p>
+      <p class="gh-desc">{{ props.ghost ? '怪奇小队专属领地：幽灵帖仅幽灵可见，普通世界完全无痕' : '全站用户的开源项目大厅：一条帖子 = 一个项目，点作者名进 TA 的主页，点项目名进 /用户名/项目名 目录路由' }}</p>
       <div class="gh-headrow">
         <div class="gh-badges">
           <span class="gh-badge"><GhIcon name="file" :size="14" /> {{ stats.posts }} 个资源</span>
@@ -215,8 +239,9 @@ onMounted(() => { load(); loadTags(); });
 
         <ShareFileTable
           v-model:filter="filterText" :rows="rows" :loading="loading"
-          :empty-text="emptyText"
+          :empty-text="emptyText" :with-visibility="!ghost && tab === 'mine'"
           @select="pickRow" @like="toggleLike" @fav="toggleFav"
+          @author="pickAuthor" @visibility="toggleVisibility"
         />
 
         <el-pagination v-if="total > size" class="gh-pager" background layout="prev, pager, next" :total="total"
@@ -253,7 +278,7 @@ onMounted(() => { load(); loadTags(); });
 .gh-repohead { margin-bottom: 14px; }
 .gh-crumb {
   display: flex; align-items: center; gap: 7px; font-size: 18px; color: var(--text-2);
-  .gh-owner { color: var(--primary); cursor: default; }
+  .gh-owner { color: var(--primary); cursor: pointer; text-decoration: none; &:hover { text-decoration: underline; } }
   .gh-sep { color: var(--text-3); }
   b { color: var(--primary); font-weight: 600; }
   .gh-vis {

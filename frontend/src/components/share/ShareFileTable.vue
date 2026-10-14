@@ -11,8 +11,10 @@ const props = defineProps({
   rows: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   emptyText: { type: String, default: '' }, // 由父层按 标签/幽灵页 分支算好传入
+  // 「我的」视图：行内显示开源/私密开关（父层调 visibility 接口，失败自行回滚）
+  withVisibility: { type: Boolean, default: false },
 });
-const emit = defineEmits(['select', 'like', 'fav']);
+const emit = defineEmits(['select', 'like', 'fav', 'author', 'visibility']);
 
 // 筛选框双向绑定（纯前端筛当前页，无后端搜索接口）
 const filter = defineModel('filter', { type: String, default: '' });
@@ -56,6 +58,8 @@ const stamp = (p) => p.update_time || p.create_time;
         @click="emit('select', p.id)" @keyup.enter="emit('select', p.id)"
       >
         <span class="c-name">
+          <!-- 私密项目：仅作者本人「我的」视图能看到这把锁（后端已过滤他人视角） -->
+          <span v-if="p.is_public === 0" class="gh-lock" title="私密项目（仅自己可见）">🔒</span>
           <GhIcon :name="KIND_ICON[postKind(p)]" :size="16" class="gh-ficon" />
           <span class="gh-fname" :title="p.title">{{ p.title }}</span>
           <!-- 项目制：有文件夹/仓库的帖子给个小标记，一眼知道点进去是目录树而不是一堆附件 -->
@@ -66,8 +70,14 @@ const stamp = (p) => p.update_time || p.create_time;
             <GhIcon name="file-directory-fill" :size="12" /> {{ p.file_count }}
           </span>
         </span>
-        <span class="c-author" :title="p.nickname">{{ p.nickname }}</span>
+        <span class="c-author" :title="p.nickname" @click.stop="emit('author', p)">{{ p.nickname }}</span>
         <span class="c-acts">
+          <!-- 开源开关：@click.stop 防止冒泡到整行跳转；change 才发请求，父层失败回滚 -->
+          <el-switch
+            v-if="withVisibility" :model-value="p.is_public !== 0" size="small" inline-prompt
+            active-text="🌍" inactive-text="🔒" class="gh-vis" title="切换开源 / 私密"
+            @click.stop @change="emit('visibility', p, $event)"
+          />
           <button class="gh-act" :class="{ on: p.is_liked }" title="点赞" @click.stop="emit('like', p)">👍 {{ cnt(p.like_count) }}</button>
           <button class="gh-act" :class="{ on: p.is_faved }" title="收藏" @click.stop="emit('fav', p)">⭐ {{ cnt(p.fav_count) }}</button>
           <span class="gh-act plain" title="评论">💬 {{ cnt(p.comment_count) }}</span>
@@ -114,7 +124,7 @@ const stamp = (p) => p.update_time || p.create_time;
 
 .gh-thead, .gh-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 110px 150px 100px;
+  grid-template-columns: minmax(0, 1fr) 110px 204px 100px;
   gap: 10px; align-items: center; padding: 0 14px;
 }
 .gh-thead {
@@ -130,6 +140,7 @@ const stamp = (p) => p.update_time || p.create_time;
   &:hover { background: var(--surface-1); }
   &:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
   .c-name { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text); }
+  .gh-lock { flex: none; font-size: 12px; }
   .gh-ficon { color: var(--text-3); }
   .gh-fbadge {
     flex: none; display: inline-flex; align-items: center; gap: 3px;
@@ -141,9 +152,14 @@ const stamp = (p) => p.update_time || p.create_time;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     &:hover { color: var(--primary); text-decoration: underline; }
   }
-  .c-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .c-author {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer; &:hover { color: var(--primary); }
+  }
   .c-time { text-align: right; color: var(--text-3); font-size: 12.5px; white-space: nowrap; }
   .c-acts { display: flex; gap: 8px; align-items: center; }
+  // 开源开关内联文字（🌍/🔒）需要比默认 40px 略宽
+  .gh-vis { flex: none; width: 52px; --el-switch-on-color: var(--success-fg, #16a34a); }
 }
 
 .gh-act {

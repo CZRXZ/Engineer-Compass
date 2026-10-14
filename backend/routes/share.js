@@ -16,6 +16,7 @@ import {
   MAX_FILE, MAX_BATCH, FOLDER_MAX, USER_QUOTA,
   userDir, absPathOf, saveUploads, usedOf, purgePostFiles, purgeUploads, isInlineOk, discardUploads, removeFileRow, mimeOf,
 } from '../lib/shareFiles.js';
+import { uniquePostSlug } from '../lib/slug.js';
 
 const r = Router();
 
@@ -90,6 +91,24 @@ function ghostVisible(req, p) {
 // 写权限：作者本人或管理员（PUT/DELETE 行、附件、Gitee 同步共用一套，避免各处漂移）
 const canEdit = (p, req) => Number(p?.user_id) === uid(req) || !!req.user?.is_admin;
 
+// 开源/私密 + 幽灵统一可见性：私密帖仅作者本人/管理员；私密与幽灵双隔离并行。
+// 对不可见者统一 404（不区分"不存在"与"没权限"，防探测）。
+function postVisible(req, p) {
+  if (!p) return false;
+  if (!ghostVisible(req, p)) return false;
+  // 详情查询把作者列别名成 author_id（SELECT * 的行才是 user_id），两处都认
+  const ownerId = p.user_id ?? p.author_id;
+  const isOwner = Number(ownerId) === uid(req);
+  if (Number(p.is_public) === 0 && !isOwner && !req.user?.is_admin) return false;
+  return true;
+}
+
+// 开源隔离条件：非「我的」视图只出开源帖；管理员例外（后台巡检口径，同幽灵帖处理）
+function openClause(req, scope, alias = 'p') {
+  if (scope === 'mine') return ''; // 本人看自己：公开私密全量
+  return req.user?.is_admin ? '' : `AND ${alias}.is_public = 1`;
+}
+
 // 帖子的标签 + 作者信息 + 计数（列表/详情共用拼装）
 function decorate(row) {
   const tags = db.prepare(
@@ -136,7 +155,9 @@ r.get('/posts', optionalAuth, (req, res) => {
   const where = [
     tag ? 'AND p.id IN (SELECT pt.post_id FROM share_post_tag pt JOIN share_tag t ON t.id = pt.tag_id WHERE t.name = ?)' : '',
     scope === 'mine' ? 'AND p.user_id = ?' : '',
-    scope === 'favs' ? 'AND p.id IN (SELECT post_id FROM share_fav WHERE user_id = ?)' : '',
+    // 收藏夹只显示仍开源的项目（帖主转私密后自动从他人收藏视图消失）
+    scope === 'favs' ? 'AND p.id IN (SELECT post_id FROM share_fav WHERE user_id = ?) AND p.is_public = 1' : '',
+    openClause(req, scope, 'p'),
     ghostCond,
   ].filter(Boolean).join(' ');
   const orderBy = {
@@ -149,8 +170,8 @@ r.get('/posts', optionalAuth, (req, res) => {
   const params = [...(tag ? [tag] : []), ...(scope ? [me] : [])];
   const total = db.prepare(`SELECT COUNT(*) AS n FROM share_post p WHERE 1=1 ${where}`).get(...params).n;
   const rows = db.prepare(
-    `SELECT p.id, p.title, p.content, p.attachments, p.gitee_repo, p.create_time, p.update_time,
-            u.id AS author_id, u.nickname, u.avatar,
+    `SELECT p.id, p.title, p.content, p.attachments, p.gitee_repo, p.slug, p.is_public, p.create_time, p.update_time,
+            u.id AS author_id, u.username, u.nickname, u.avatar,
             (SELECT COUNT(*) FROM share_like l WHERE l.post_id = p.id) AS like_count,
             (SELECT COUNT(*) FROM share_fav f WHERE f.post_id = p.id) AS fav_count,
             (SELECT COUNT(*) FROM share_comment c WHERE c.post_id = p.id) AS comment_count,
@@ -166,7 +187,7 @@ r.get('/posts', optionalAuth, (req, res) => {
   // 仓库页顶部徽标：全站聚合。跟随幽灵身份（普通用户不计幽灵帖、幽灵页只算幽灵帖），
   // 但**不跟随 scope/tag** —— 徽标表示"这个板块有多大"，不该因切到「我的收藏」而缩水。
   // 四张表都很小，一条聚合可忽略。
-  const gcS = ghostClause(req, '', ghostOnly, 'sp');
+  const gcS = `${ghostClause(req, '', ghostOnly, 'sp')} ${openClause(req, '', 'sp')}`;
   const stats = db.prepare(
     `SELECT
        (SELECT COUNT(*) FROM share_post sp WHERE 1=1 ${gcS}) AS posts,
@@ -178,27 +199,74 @@ r.get('/posts', optionalAuth, (req, res) => {
   res.json({ rows: rows.map(decorate), total, page, size, sort, tag, scope, stats });
 });
 
-// GET /api/share/posts/:id — 详情（含评论）
-r.get('/posts/:id', optionalAuth, (req, res) => {
-  const me = uid(req);
-  const p = db.prepare(
+// 项目详情主查询（数字 id 路由与 /p/:username/:slug 共用，保证两份 payload 不漂移）
+function detailPost(me, where, ...params) {
+  return db.prepare(
     `SELECT p.id, p.title, p.content, p.attachments, p.is_ghost, p.gitee_repo, p.gitee_ref,
-            p.create_time, p.update_time,
-            u.id AS author_id, u.nickname, u.avatar,
+            p.slug, p.is_public, p.create_time, p.update_time,
+            u.id AS author_id, u.username, u.nickname, u.avatar,
             (SELECT COUNT(*) FROM share_like l WHERE l.post_id = p.id) AS like_count,
             (SELECT COUNT(*) FROM share_fav f WHERE f.post_id = p.id) AS fav_count,
             (SELECT COUNT(*) FROM share_comment c WHERE c.post_id = p.id) AS comment_count,
             EXISTS(SELECT 1 FROM share_like l WHERE l.post_id = p.id AND l.user_id = ?) AS is_liked,
             EXISTS(SELECT 1 FROM share_fav f WHERE f.post_id = p.id AND f.user_id = ?) AS is_faved
-     FROM share_post p JOIN user u ON u.id = p.user_id WHERE p.id = ?`
-  ).get(me, me, Number(req.params.id));
-  if (!p || !ghostVisible(req, p)) return res.status(404).json({ error: '帖子不存在' });
+     FROM share_post p JOIN user u ON u.id = p.user_id WHERE ${where}`
+  ).get(me, me, ...params);
+}
+function detailPayload(p) {
   const comments = db.prepare(
     `SELECT c.id, c.content, c.create_time, u.id AS user_id, u.nickname, u.avatar
      FROM share_comment c JOIN user u ON u.id = c.user_id
      WHERE c.post_id = ? ORDER BY c.create_time ASC, c.id ASC`
   ).all(p.id);
-  res.json({ ...decorate(p), comments, files: filesOf(p.id) });
+  return { ...decorate(p), comments, files: filesOf(p.id) };
+}
+
+// GET /api/share/posts/:id — 详情（数字 id 旧路由保留：前端拿到后自行 replace 到 /:username/:slug）
+r.get('/posts/:id', optionalAuth, (req, res) => {
+  const me = uid(req);
+  const p = detailPost(me, 'p.id = ?', Number(req.params.id));
+  if (!postVisible(req, p)) return res.status(404).json({ error: '帖子不存在' });
+  res.json(detailPayload(p));
+});
+
+// GET /api/share/u/:username — 用户开源项目页（GitHub 风 /:username）
+// 他人只见 is_public=1 的普通帖；作者本人含私密；幽灵账号对非授权访问者整体 404。
+r.get('/u/:username', optionalAuth, (req, res) => {
+  const me = uid(req);
+  const u = db.prepare('SELECT id, username, nickname, avatar, is_ghost FROM user WHERE username = ?')
+    .get(String(req.params.username));
+  if (!u) return res.status(404).json({ error: '用户不存在' });
+  const isOwner = me === Number(u.id);
+  if (u.is_ghost && !isOwner && !req.user?.is_admin) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  const conds = ['p.user_id = ?'];
+  const params = [u.id];
+  if (!isOwner && !req.user?.is_admin) conds.push('p.is_public = 1', 'p.is_ghost = 0');
+  const projects = db.prepare(
+    `SELECT p.id, p.title, p.content, p.slug, p.is_public, p.gitee_repo, p.create_time, p.update_time,
+            (SELECT COUNT(*) FROM share_like l WHERE l.post_id = p.id) AS like_count,
+            (SELECT COUNT(*) FROM share_fav f WHERE f.post_id = p.id) AS fav_count,
+            (SELECT COUNT(*) FROM share_comment c WHERE c.post_id = p.id) AS comment_count,
+            (SELECT COUNT(*) FROM share_file f WHERE f.post_id = p.id) AS file_count
+     FROM share_post p WHERE ${conds.join(' AND ')}
+     ORDER BY p.update_time DESC, p.id DESC`
+  ).all(...params).map(decorate);
+  res.json({
+    user: { id: Number(u.id), username: u.username, nickname: u.nickname, avatar: u.avatar || null },
+    projects, total: projects.length,
+  });
+});
+
+// GET /api/share/p/:username/:slug — GitHub 风 /:username/:slug 单项目（payload 与数字路由完全一致）
+r.get('/p/:username/:slug', optionalAuth, (req, res) => {
+  const me = uid(req);
+  const u = db.prepare('SELECT id FROM user WHERE username = ?').get(String(req.params.username));
+  if (!u) return res.status(404).json({ error: '项目不存在' });
+  const p = detailPost(me, 'p.user_id = ? AND p.slug = ?', u.id, String(req.params.slug));
+  if (!postVisible(req, p)) return res.status(404).json({ error: '项目不存在' });
+  res.json(detailPayload(p));
 });
 
 // GET /api/share/tags — 子板块标签（按帖子数降序）
@@ -208,7 +276,7 @@ r.get('/tags', optionalAuth, (req, res) => {
   const rows = db.prepare(
     `SELECT t.name, ${all ? 'COUNT(pt.post_id)' : 'COUNT(sp.id)'} AS count
      FROM share_tag t LEFT JOIN share_post_tag pt ON pt.tag_id = t.id
-     ${all ? '' : 'LEFT JOIN share_post sp ON sp.id = pt.post_id AND sp.is_ghost = 0'}
+     ${all ? '' : 'LEFT JOIN share_post sp ON sp.id = pt.post_id AND sp.is_ghost = 0 AND sp.is_public = 1'}
      GROUP BY t.id ${all ? '' : 'HAVING COUNT(sp.id) > 0'} ORDER BY count DESC, t.id`
   ).all();
   res.json(rows);
@@ -230,8 +298,13 @@ r.post('/posts', authRequired, mutedGuard, async (req, res) => {
 
   // 幽灵帖归属：幽灵用户默认发「仅怪奇可见」（显式传 0 才发普通帖）；普通用户强制普通帖
   const isGhost = req.user?.is_ghost ? (req.body?.is_ghost === 0 ? 0 : 1) : 0;
-  const info = db.prepare('INSERT INTO share_post (user_id, title, content, attachments, is_ghost) VALUES (?, ?, ?, ?, ?)')
-    .run(uid(req), title, content, JSON.stringify(atts), isGhost);
+  // 开源/私密：默认开源（存量行为不突变）；只认 0/1，其余一律按开源
+  const isPublic = Number(req.body?.is_public) === 0 ? 0 : 1;
+  const authorId = uid(req);
+  const slug = uniquePostSlug(db, authorId, title);
+  const info = db.prepare(
+    'INSERT INTO share_post (user_id, title, content, attachments, is_ghost, slug, is_public) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(authorId, title, content, JSON.stringify(atts), isGhost, slug, isPublic);
   const postId = Number(info.lastInsertRowid);
   bindStagedFiles(uid(req), postId, req.body?.files); // 弹窗里传好的文件夹暂存行 → 绑到新帖
   if (tags.length) {
@@ -244,7 +317,7 @@ r.post('/posts', authRequired, mutedGuard, async (req, res) => {
     }
   }
   const gitee = await applyGitee(postId, req); // 服务端自己拉，绝不采信客户端传来的树
-  res.json({ id: postId, message: '发布成功', ...withGitee(gitee) });
+  res.json({ id: postId, slug, is_public: isPublic, message: '发布成功', ...withGitee(gitee) });
 });
 
 // PUT /api/share/posts/:id — 编辑（本人或管理员）
@@ -265,8 +338,18 @@ r.put('/posts/:id', authRequired, async (req, res) => {
   const tags = req.body?.tags === undefined ? undefined : normTags(req.body.tags);
   if (tags === null) return res.status(400).json({ error: '标签最多 5 个，每个 ≤12 字' });
 
-  db.prepare('UPDATE share_post SET title = ?, content = ?, attachments = ?, update_time = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(title, content, JSON.stringify(atts), p.id);
+  // is_public 三态同 attachments：缺省不动；slug 一经生成不可改（URL 身份稳定）
+  const sets = ['title = ?', 'content = ?', 'attachments = ?'];
+  const vals = [title, content, JSON.stringify(atts)];
+  if (req.body?.is_public !== undefined) {
+    const v = Number(req.body.is_public);
+    if (![0, 1].includes(v)) return res.status(400).json({ error: 'is_public 仅支持 0 私密 / 1 开源' });
+    sets.push('is_public = ?');
+    vals.push(v);
+  }
+  sets.push("update_time = CURRENT_TIMESTAMP");
+  vals.push(p.id);
+  db.prepare(`UPDATE share_post SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
   // 文件夹：整树替换语义（旧的上传文件连盘带行清掉，再绑本次的暂存行）。
   // 字段缺省 = 不动文件夹 —— 否则老客户端一次改标题就会把整个项目删空。
   // 用 purgeUploads 而非 purgePostFiles：Gitee 树由下面的 gitee_repo 单独管，不跟着一起清。
@@ -286,6 +369,18 @@ r.put('/posts/:id', authRequired, async (req, res) => {
   }
   const gitee = await applyGitee(p.id, req);
   res.json({ message: '已更新', ...withGitee(gitee) });
+});
+
+// POST /api/share/posts/:id/visibility — 开源/私密切换（「我的」子页开关；仅作者或管理员）
+r.post('/posts/:id/visibility', authRequired, (req, res) => {
+  const p = db.prepare('SELECT * FROM share_post WHERE id = ?').get(Number(req.params.id));
+  if (!p) return res.status(404).json({ error: '帖子不存在' });
+  if (!canEdit(p, req)) return res.status(403).json({ error: '只能修改自己项目的开源状态' });
+  const v = Number(req.body?.is_public);
+  if (![0, 1].includes(v)) return res.status(400).json({ error: 'is_public 仅支持 0 私密 / 1 开源' });
+  db.prepare('UPDATE share_post SET is_public = ? WHERE id = ?').run(v, p.id);
+  logAudit(req, 'share-visibility', `${p.slug || p.id} → ${v ? '开源' : '私密'}`, { post_id: p.id, is_public: v });
+  res.json({ is_public: v, message: v ? '已设为开源（任何人凭链接可见）' : '已设为私密（仅你自己可见）' });
 });
 
 // DELETE /api/share/posts/:id — 删帖（本人或管理员；评论/点赞/收藏/标签随外键级联删除）
@@ -372,7 +467,7 @@ r.get('/files/:fid', optionalAuth, (req, res) => {
 // GET /api/share/posts/:id/zip — 整包下载（文件夹原样成目录；store-only 零依赖）
 r.get('/posts/:id/zip', optionalAuth, (req, res) => {
   const p = db.prepare('SELECT * FROM share_post WHERE id = ?').get(Number(req.params.id));
-  if (!p || !ghostVisible(req, p)) return res.status(404).json({ error: '帖子不存在' });
+  if (!postVisible(req, p)) return res.status(404).json({ error: '帖子不存在' });
   const rows = db.prepare(`SELECT * FROM share_file WHERE post_id = ? AND source != 'gitee' ORDER BY path`).all(p.id);
   if (!rows.length) return res.status(404).json({ error: '这个项目还没有文件' });
   const entries = [];
@@ -469,7 +564,7 @@ r.post('/gitee/tree', authRequired, async (req, res) => {
 // POST /api/share/posts/:id/gitee-sync — 作者/管理员：重新拉取覆盖 source='gitee' 的行
 r.post('/posts/:id/gitee-sync', authRequired, async (req, res) => {
   const p = db.prepare('SELECT * FROM share_post WHERE id = ?').get(Number(req.params.id));
-  if (!p || !ghostVisible(req, p)) return res.status(404).json({ error: '帖子不存在' });
+  if (!postVisible(req, p)) return res.status(404).json({ error: '帖子不存在' });
   if (!canEdit(p, req)) return res.status(403).json({ error: '只有作者本人或管理员可以同步仓库' });
   const repo = String(req.body?.repo || p.gitee_repo || '').trim();
   const ref = String(req.body?.ref || p.gitee_ref || '').trim();
@@ -505,13 +600,17 @@ r.get('/files/:fid/raw', optionalAuth, async (req, res) => {
   }
 });
 
-// 取一行文件 + 可见性校验（单文件读取与文本预览共用；不可见一律 404 不泄露存在性）
+// 取一行文件 + 可见性校验（单文件读取/raw/text 共用；不可见一律 404 不泄露存在性）
+// 私密帖的文件即使枚举到 fid 也取不出（fid 枚举防护与帖子详情同口径）。
 function readableFile(req, fid) {
   const f = db.prepare(
-    `SELECT f.*, p.is_ghost FROM share_file f LEFT JOIN share_post p ON p.id = f.post_id WHERE f.id = ?`
+    `SELECT f.*, p.is_ghost, p.is_public, p.user_id AS post_user_id
+     FROM share_file f LEFT JOIN share_post p ON p.id = f.post_id WHERE f.id = ?`
   ).get(Number(fid));
   if (!f) return null;
-  if (f.post_id && !ghostVisible(req, f)) return null;
+  if (f.post_id && !postVisible(req, { is_ghost: f.is_ghost, is_public: f.is_public, user_id: f.post_user_id })) {
+    return null;
+  }
   if (!f.post_id && Number(f.user_id) !== uid(req)) return null; // 暂存文件只有本人能取
   return f;
 }
@@ -571,8 +670,8 @@ r.delete('/files/:fid', authRequired, (req, res) => {
 r.post('/posts/:id/like', authRequired, (req, res) => {
   const postId = Number(req.params.id);
   const me = uid(req);
-  const exists = db.prepare('SELECT is_ghost FROM share_post WHERE id = ?').get(postId);
-  if (!exists || !ghostVisible(req, exists)) return res.status(404).json({ error: '帖子不存在' });
+  const exists = db.prepare('SELECT is_ghost, is_public, user_id FROM share_post WHERE id = ?').get(postId);
+  if (!postVisible(req, exists)) return res.status(404).json({ error: '帖子不存在' });
   const had = db.prepare('SELECT 1 FROM share_like WHERE post_id = ? AND user_id = ?').get(postId, me);
   if (had) {
     db.prepare('DELETE FROM share_like WHERE post_id = ? AND user_id = ?').run(postId, me);
@@ -589,8 +688,8 @@ r.post('/posts/:id/like', authRequired, (req, res) => {
 r.post('/posts/:id/fav', authRequired, (req, res) => {
   const postId = Number(req.params.id);
   const me = uid(req);
-  const exists = db.prepare('SELECT is_ghost FROM share_post WHERE id = ?').get(postId);
-  if (!exists || !ghostVisible(req, exists)) return res.status(404).json({ error: '帖子不存在' });
+  const exists = db.prepare('SELECT is_ghost, is_public, user_id FROM share_post WHERE id = ?').get(postId);
+  if (!postVisible(req, exists)) return res.status(404).json({ error: '帖子不存在' });
   const had = db.prepare('SELECT 1 FROM share_fav WHERE post_id = ? AND user_id = ?').get(postId, me);
   if (had) {
     db.prepare('DELETE FROM share_fav WHERE post_id = ? AND user_id = ?').run(postId, me);
@@ -608,8 +707,8 @@ r.post('/posts/:id/comments', authRequired, mutedGuard, (req, res) => {
   const content = String(req.body?.content || '').trim();
   if (!content || content.length > 1000) return res.status(400).json({ error: '评论 1-1000 字' });
   const postId = Number(req.params.id);
-  const exists = db.prepare('SELECT is_ghost FROM share_post WHERE id = ?').get(postId);
-  if (!exists || !ghostVisible(req, exists)) return res.status(404).json({ error: '帖子不存在' });
+  const exists = db.prepare('SELECT is_ghost, is_public, user_id FROM share_post WHERE id = ?').get(postId);
+  if (!postVisible(req, exists)) return res.status(404).json({ error: '帖子不存在' });
   const me = uid(req);
   const info = db.prepare('INSERT INTO share_comment (post_id, user_id, content) VALUES (?, ?, ?)')
     .run(postId, me, content);

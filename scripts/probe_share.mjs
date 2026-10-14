@@ -132,11 +132,11 @@ try {
   const titles = () => page.locator('.gh-row .gh-fname').allInnerTexts();
   const badgeNum = async (i) => numOf(await page.locator('.gh-badge').nth(i).innerText());
 
-  // ① 仓库头
-  ok('① 仓库头面包屑渲染（Engineer-Compass / 资源分享）',
+  // ① 仓库头（GitHub 化后：开源资料大厅）
+  ok('① 仓库头面包屑渲染（Engineer-Compass / 开源资料）',
     (await page.locator('.gh-crumb:has-text("Engineer-Compass")').count()) === 1
-    && (await page.locator('.gh-crumb:has-text("资源分享")').count()) === 1);
-  ok('① 板块描述渲染', (await page.locator('.gh-desc').first().innerText()).includes('交流区'));
+    && (await page.locator('.gh-crumb:has-text("开源资料")').count()) === 1);
+  ok('① 板块描述渲染', (await page.locator('.gh-desc').first().innerText()).includes('开源项目大厅'));
   ok(`① 徽标「资源数」= API stats.posts（UI ${await badgeNum(0)} / API ${stats.posts}）`, (await badgeNum(0)) === Number(stats.posts));
   ok(`① 徽标「点赞」= API stats.likes（UI ${await badgeNum(1)} / API ${stats.likes}）`, (await badgeNum(1)) === Number(stats.likes));
   ok(`① 徽标「收藏」= API stats.favs（UI ${await badgeNum(2)} / API ${stats.favs}）`, (await badgeNum(2)) === Number(stats.favs));
@@ -158,11 +158,14 @@ try {
   ok(`★ ⑧ 排序切「最新」→ 首行 = API sort=new 首行（${t[0]}）`, t[0] === refNew.rows[0]?.title);
   ok('⑧ 排序生效：晚建的纯文字帖排在图片帖之前', t.indexOf(T_TXT) >= 0 && t.indexOf(T_IMG) >= 0 && t.indexOf(T_TXT) < t.indexOf(T_IMG));
 
-  // ③ 点行 → 跳独立详情子路由 /share/:id
-  await rowOf(T_TXT).click();
+  // ③ 点行 → 跳 GitHub 风项目路由 /:username/:slug（旧 /share/:id 只做静默中转）
+  // 点标题格而非整行中心：互动列加宽后行中心点会落在「作者」列（跳用户主页）
+  const txtHref = `/${encodeURIComponent(ra.user.username)}/${encodeURIComponent(pTxt.slug)}`;
+  await rowOf(T_TXT).locator('.gh-fname').click();
+  await page.waitForURL(`**${txtHref}`, { timeout: 10000 });
   await page.locator('.gh-readme .gh-rhead').waitFor({ state: 'visible', timeout: 10000 });
-  ok(`★ ③ 点行 → URL 变为 /share/:id（实际 ${new URL(page.url()).pathname}）`,
-    new URL(page.url()).pathname === `/share/${pTxt.id}`);
+  ok(`★ ③ 点行 → URL 变为 /:username/:slug（实际 ${new URL(page.url()).pathname}）`,
+    new URL(page.url()).pathname === txtHref);
   ok('★ ③ 详情页出现该帖标题', (await page.locator('.gh-readme .gh-rfile').innerText()).includes(T_TXT));
   ok('★ ③ 详情页渲染正文内容', (await page.locator('.gh-readme .gh-rbody').innerText()).includes(C_TEXT));
   ok('★ ③ 独立页不出现「不在当前列表视图」误报（standalone 生效，冷启动深链必真）',
@@ -189,7 +192,7 @@ try {
     (await page.locator('.gh-readme .gh-ctop .gh-ctime').first().innerText()).startsWith('commented'));
 
   // ⑤b 返回按钮 → 列表；点赞计数已落到行上（两个页面各持一份数据，返回时自愈）
-  await page.locator('.gh-back').click();
+  await page.locator('.pv-back').click();
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 10000 });
   await switchToNewest(page);
   // 返回时列表会拿缓存先画、再 load() 静默刷新，故必须等那一行刷成新值再断言（否则读到的是缓存里的旧数）
@@ -208,8 +211,8 @@ try {
   ok(`★ ⑥ 切「我的收藏」→ 列表只剩收藏过的图片帖（${favRows} 行）`,
     favRows === 1 && (await rowOf(T_IMG).count()) === 1 && (await rowOf(T_TXT).count()) === 0);
 
-  // ⑧b 标签过滤（先回「资源」tab）
-  await page.locator('.gh-tab:has-text("资源")').click();
+  // ⑧b 标签过滤（先回「全部开源」tab）
+  await page.locator('.gh-tab', { hasText: '全部开源' }).click();
   await page.locator(`.gh-topic:has-text("${TAG_A}")`).click();
   await page.waitForFunction((s) => document.querySelectorAll('.gh-row').length === 1
     && document.querySelector('.gh-row').innerText.includes(s), T_IMG, { timeout: 10000 }).catch(() => {});
@@ -229,22 +232,25 @@ try {
   // ⑨ 幽灵隔离（B 已开幽灵身份，默认视图只普通帖；幽灵帖不混入）
   ok('★ ⑨ 幽灵帖不出现在默认列表（普通帖视图）', (await rowOf(T_GHOST).count()) === 0);
 
-  // ⑦ 冷启动深链 /share/:id（正式形态：从消息通知、我的收藏、外部分享的链接直接落地）
+  // ⑦ 冷启动深链 /share/:id（消息通知、我的收藏、外部分享的旧链）→ 中转盘静默 replace 到规范路由
   await page.goto(`${WEB}/share/${pTxt.id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForURL(`**${txtHref}`, { timeout: 20000 });
   const deepOk = await page.locator('.gh-readme .gh-rhead').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
-  ok('★ ⑦ 冷启动 /share/:id 直达该帖详情（含没进过列表的直链）',
-    deepOk && (await page.locator('.gh-readme .gh-rfile').innerText()).includes(T_TXT));
+  ok('★ ⑦ 冷启动 /share/:id 经中转直达规范路由并渲染该帖',
+    deepOk && new URL(page.url()).pathname === txtHref
+    && (await page.locator('.gh-readme .gh-rfile').innerText()).includes(T_TXT));
 
-  // ⑦b 深链指向不存在的帖 → 就地报错，不白屏
+  // ⑦b 深链指向不存在的帖 → 中转页就地报错，不白屏
   await page.goto(`${WEB}/share/99999999`, { waitUntil: 'domcontentloaded' });
-  const errShown = await page.locator('.gh-rstate.err').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
-  ok('★ ⑦b 深链指向不存在的帖 → 详情页就地显示错误（不整页白屏）', errShown);
+  const errShown = await page.locator('.sr-err').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
+  ok('★ ⑦b 深链指向不存在的帖 → 中转页显示错误（不整页白屏）', errShown);
 
-  // ⑦c 兼容层：老链接 /share?post=ID 必须重定向到 /share/:id（消息通知、MyView、历史书签全走这条）
+  // ⑦c 兼容层：老链接 /share?post=ID → /share/:id → /:u/:slug（消息通知、MyView、历史书签全走这条）
   await page.goto(`${WEB}/share?post=${pTxt.id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForURL(`**${txtHref}`, { timeout: 20000 });
   const oldOk = await page.locator('.gh-readme .gh-rhead').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
-  ok('★ ⑦c 老链接 /share?post=ID 重定向到 /share/:id 并渲染出该帖',
-    oldOk && new URL(page.url()).pathname === `/share/${pTxt.id}`
+  ok('★ ⑦c 老链接 /share?post=ID 最终落到规范路由并渲染出该帖',
+    oldOk && new URL(page.url()).pathname === txtHref
     && (await page.locator('.gh-readme .gh-rfile').innerText()).includes(T_TXT));
   ok('⑦c 老链接的 ?post= 已从 URL 上清掉（不留兼容残渣）', !page.url().includes('post='));
 
@@ -252,15 +258,16 @@ try {
   await page.goto(`${WEB}/share`, { waitUntil: 'domcontentloaded' });
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 20000 });
   await switchToNewest(page);
-  await rowOf(T_TXT).click();
+  await rowOf(T_TXT).locator('.gh-fname').click();
   await page.waitForFunction((s) => document.querySelector('.gh-readme .gh-rfile')?.innerText.includes(s), T_TXT, { timeout: 10000 }).catch(() => {});
-  await page.locator('.gh-back').click();
+  await page.locator('.pv-back').click();
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 10000 });
   await switchToNewest(page);
-  await rowOf(T_IMG).click();
-  ok('★ ⑦d 连续点两条帖 → 第二次也落到对应的详情页',
+  const imgHref = `/${encodeURIComponent(ra.user.username)}/${encodeURIComponent(pImg.slug)}`;
+  await rowOf(T_IMG).locator('.gh-fname').click();
+  ok('★ ⑦d 连续点两条帖 → 第二次也落到对应的项目页',
     await page.waitForFunction((s) => document.querySelector('.gh-readme .gh-rfile')?.innerText.includes(s), T_IMG, { timeout: 10000 }).then(() => true).catch(() => false)
-    && new URL(page.url()).pathname === `/share/${pImg.id}`);
+    && new URL(page.url()).pathname === imgHref);
 
   // ⑦e 滚动：换页回顶 + 返回列表还原位置。需列表真的满一屏才有意义 → 临时造 12 条凑满首页。
   // 「是否可滚动」不能听天由命：页面总高随库里数据变（右栏标签条数、标题换行都会撑高），
@@ -281,7 +288,7 @@ try {
   await page.evaluate(() => window.scrollTo(0, 700));
   await page.waitForTimeout(200);
   const s0 = await page.evaluate(() => window.scrollY);
-  await page.locator('.gh-row').nth(9).click();          // 第 10 行（矮视口首屏外）
+  await page.locator('.gh-row').nth(9).locator('.gh-fname').click(); // 第 10 行（矮视口首屏外）
   await page.locator('.gh-readme .gh-rhead').waitFor({ state: 'visible', timeout: 10000 });
   ok(`★ ⑦e 从列表滚动位置点行 → 详情页回到顶部（列表曾滚到 ${s0}）`,
     (await page.evaluate(() => window.scrollY)) === 0);
@@ -304,7 +311,7 @@ try {
   ok('★ ⑩ 幽灵页看得见自己的幽灵帖', (await rowOf(T_GHOST).count()) === 1);
   ok('★ ⑩ 幽灵页看不见普通帖（ghost=1 反向过滤）', (await rowOf(T_TXT).count()) === 0 && (await rowOf(T_IMG).count()) === 0);
   ok('★ ⑩ 幽灵页自动套暗色主题（html.ghost-mode）', await page.evaluate(() => document.documentElement.classList.contains('ghost-mode')));
-  await rowOf(T_GHOST).click();
+  await rowOf(T_GHOST).locator('.gh-fname').click();
   await page.locator('.gh-readme .gh-rbody').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
   ok(`★ ⑩ 幽灵帖点行 → 落 /ghost-share/:id（不串到普通详情页）`,
     new URL(page.url()).pathname === `/ghost-share/${pGhost.id}`);
@@ -350,11 +357,11 @@ try {
   ok('⑨ 普通用户 A 能看到普通帖', (await pageA.locator('.gh-row', { hasText: T_TXT }).count()) === 1);
   // 幽灵帖的详情子路由是新增的第二个入口 —— 直连深链必须同样拿不到
   await pageA.goto(`${WEB}/share/${pGhost.id}`, { waitUntil: 'domcontentloaded' });
-  const ghostErr = await pageA.locator('.gh-rstate.err').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
-  ok('★ ⑨ 普通用户直链幽灵帖详情 /share/:id → 就地 404，不泄露内容', ghostErr);
+  const ghostErr = await pageA.locator('.sr-err').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
+  ok('★ ⑨ 普通用户直链幽灵帖旧链 /share/:id → 中转页 404，不泄露内容', ghostErr);
   await pageA.goto(`${WEB}/share/${pTxt.id}`, { waitUntil: 'domcontentloaded' });
   await pageA.locator('.gh-readme .gh-rhead').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
-  ok('⑩ 匿名/普通视角下正常帖详情仍可读（改权限没误伤）',
+  ok('⑩ 匿名/普通视角下正常帖项目页仍可读（改权限没误伤）',
     (await pageA.locator('.gh-readme .gh-rfile').innerText()).includes(T_TXT));
   await pageA.screenshot({ path: SHOT('light'), fullPage: true }).catch(() => {});
   ok(`⑨ 已存浅色截图 ${SHOT('light')}（供人工看观感）`, true);

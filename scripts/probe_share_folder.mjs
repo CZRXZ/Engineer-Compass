@@ -1,12 +1,13 @@
 // 浏览器探针（Playwright + Chromium）：资源分享「项目文件夹 + 在线预览」的守护测试
 //
 // 被测行为（核心链路）：
-//   上传文件夹（相对路径 → 落盘 → 暂存行）→ 发帖绑树 → 详情页目录树（缩进/展开/图标）
-//   → 点文件就地预览（文本走 <pre> 插值、图片走 blob objectURL）→ 整包 ZIP（保留目录结构）
+//   上传文件夹（相对路径 → 落盘 → 暂存行）→ 发帖绑树 → GitHub 风路由
+//   （/share/:id 中转 → /:u/:slug 根 → /tree/目录 → /blob/文件，刷新/深链都成立）
+//   → 文件就地预览（文本走 <pre> 插值、图片走 blob objectURL）→ 整包 ZIP（保留目录结构）
 //
 // 判别力（本探针存在的意义）：
-//   ① 目录树不渲染或层次塌陷（buildTree 前缀推导写错、缩进没跟 depth 走）
-//   ② 缩进/展开失效 → 几十个文件糊成一坨，看不出项目结构（本功能的全部意义所在）
+//   ① 目录页不渲染或层次塌陷（buildTree 前缀推导写错、目录推导错档）
+//   ② URL 驱动的目录态失效（刷新掉回根、深链打不开 → 链接无法分享）
 //   ③ 文本预览走了 v-html（XSS 面）或内容是错的（端点截断/编码错）
 //   ④ 预览不能带请求头 → 幽灵/登录态下取不到文件（objectURL 方案退化成 ?token= 或直接 404）
 //   ⑤ 恶意相对路径（../）被落盘（**安全断言**：穿越必须被拒）
@@ -135,33 +136,41 @@ try {
   page.on('pageerror', (e) => pageErrors.push(e.message));
   await seedAuth(page, ta, ra.user);
 
-  // 冷启动直链详情页（不经过列表）——子路由必须自己站得住
+  // 冷启动直链旧数字链（不经过列表）→ 中转换到 GitHub 风规范路由，根/目录都要自己站得住。
+  // （旧版「单页展开树 + 缩进分档」交互已换成 GitHub 口径：URL 即位置，一个目录一页，
+  //   刷新/后退/外发链接全部成立 —— 那部分行为由 probe_repo_ui 与下面的 /tree、F5 断言守护。）
+  const projHref = `/${encodeURIComponent(ra.user.username)}/${encodeURIComponent(p.slug)}`;
   await page.goto(`${WEB}/share/${pid}`, { waitUntil: 'domcontentloaded' });
-  await page.locator('.ft-wrap').waitFor({ state: 'visible', timeout: 20000 });
-  ok('① 冷启动直链 /share/:id 渲染出目录树（不依赖列表页预热）', true);
+  await page.waitForURL(`**${projHref}`, { timeout: 20000 });
+  await page.locator('.pv-frow').first().waitFor({ state: 'visible', timeout: 20000 });
+  ok('① 冷启动 /share/:id → 中转到 /:u/:slug，项目根直接渲染（不依赖列表页预热）',
+    new URL(page.url()).pathname === projHref);
 
-  // 全展开时 8 行：proj / assets, pic.png / src, deep, c.txt, main.js / README.md
-  // 同层目录排前、各自按名排序（与 GitHub 一致）
-  const rowTexts = await page.locator('.ft-row .ft-name').allInnerTexts();
-  ok(`① 树节点齐全（${rowTexts.length} 行：${rowTexts.join(', ')}）`, rowTexts.length === 8);
-  ok('① 同层目录排前，子目录挂在对的父目录下（proj → assets/svg 分支独立于 src 分支）',
-    rowTexts.join(',') === 'proj,assets,pic.png,src,deep,c.txt,main.js,README.md');
+  // 根目录只有顶层 proj（深层目录不再一次性铺开）
+  let rowTexts = await page.locator('.pv-frow .pv-fname').allInnerTexts();
+  ok(`① 根目录只见顶层 proj（实际：${rowTexts.join(', ')}）`,
+    rowTexts.length === 1 && rowTexts[0] === 'proj');
 
-  // 缩进：目录树 4 层 → 恰好 4 档 padding-left（层次必须一眼看得出来）
-  const pads = [...new Set(await page.locator('.ft-row').evaluateAll((els) => els.map((e) => parseInt(getComputedStyle(e).paddingLeft, 10))))].sort((a, b) => a - b);
-  ok(`★ ② 缩进按层级分档（4 层 → ${pads.length} 档：${pads.join(' / ')}px）`, pads.length === 4 && pads.every((v, i) => i === 0 || v > pads[i - 1]));
-  ok('② 4 个目录行都有展开箭头且默认展开', (await page.locator('.ft-row.dir .ft-caret.open').count()) === 4);
+  // 逐级下钻 /tree：同层目录排前、各自按名排序（与 GitHub 一致）
+  await page.locator('.pv-frow', { hasText: 'proj' }).click();
+  await page.waitForURL('**/tree/proj');
+  rowTexts = await page.locator('.pv-frow .pv-fname').allInnerTexts();
+  ok(`① /tree/proj：assets/src 两目录在前 + README.md（${rowTexts.join(',')}）`,
+    JSON.stringify(rowTexts) === JSON.stringify(['assets', 'src', 'README.md']));
+  await page.locator('.pv-frow', { hasText: 'src' }).click();
+  await page.waitForURL('**/tree/proj/src');
+  rowTexts = await page.locator('.pv-frow .pv-fname').allInnerTexts();
+  ok(`① /tree/proj/src：deep + main.js（深层目录有独立 URL）（${rowTexts.join(',')}）`,
+    JSON.stringify(rowTexts) === JSON.stringify(['deep', 'main.js']));
 
-  // 收起/展开：点 proj 应把整棵子树收掉（只剩 1 行）
-  await page.locator('.ft-row', { hasText: 'proj' }).first().click();
-  await page.waitForFunction(() => document.querySelectorAll('.ft-row').length === 1, null, { timeout: 5000 }).catch(() => {});
-  ok('★ ② 收起根目录 → 只剩 1 行', (await page.locator('.ft-row').count()) === 1);
-  await page.locator('.ft-row', { hasText: 'proj' }).first().click();
-  await page.waitForFunction(() => document.querySelectorAll('.ft-row').length === 8, null, { timeout: 5000 }).catch(() => {});
-  ok('② 再展开 → 恢复 8 行', (await page.locator('.ft-row').count()) === 8);
+  // F5 停在深层目录（目录状态不在内存里，全在 URL）
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.pv-frow', { hasText: 'main.js' }).waitFor({ state: 'visible', timeout: 15000 });
+  ok('★ ① 深层 /tree/proj/src F5 刷新后仍停留同目录',
+    new URL(page.url()).pathname === `${projHref}/tree/proj/src`);
 
-  // 文本预览：内容必须一致，且尖括号必须是**转义后的文本**（不是真标签）
-  await page.locator('.ft-row', { hasText: 'README.md' }).click();
+  // 文本预览走 /blob 子路由：内容必须一致，且尖括号必须是**转义后的文本**（不是真标签）
+  await page.goto(`${WEB}${projHref}/blob/proj/README.md`, { waitUntil: 'domcontentloaded' });
   const pvShown = await page.locator('.fp-pre').waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
   if (!pvShown) {
     // 预览没出来时把面板真实状态打出来（是报错、还是压根没渲染），否则只剩「超时」两个字无从下手
@@ -179,8 +188,8 @@ try {
   ok('★ ③ 正文里的 <script> 被当**文本**展示（未被解析执行 → 无 XSS）',
     pvText.includes('<script>alert(1)</script>') && (await page.locator('.fp-pre script').count()) === 0);
 
-  // 图片预览：<img> 的 src 必须是 blob:（= 走请求头取字节），且浏览器真的解码成功
-  await page.locator('.ft-row', { hasText: 'pic.png' }).click();
+  // 图片预览：/blob 深链冷启动；<img> 的 src 必须是 blob:（= 走请求头取字节），且浏览器真的解码成功
+  await page.goto(`${WEB}${projHref}/blob/proj/assets/pic.png`, { waitUntil: 'domcontentloaded' });
   await page.locator('.fp-img').waitFor({ state: 'visible', timeout: 10000 });
   const src = await page.locator('.fp-img').getAttribute('src');
   ok(`★ ④ 图片预览走 blob objectURL（不是 ?token= 直链）：${String(src).slice(0, 12)}…`, String(src).startsWith('blob:'));
@@ -230,23 +239,16 @@ try {
   ok(`已存暗色截图 ${SHOT('dark')}（供人工看观感）`, true);
   await ctxB.close();
 
-  // ---------- ⑩ 375px：树与预览堆叠、长路径不撑破页面 ----------
+  // ---------- ⑩ 375px：文件预览深链 + About 折到上方，长路径不撑破页面 ----------
   const ctxM = await browser.newContext({ viewport: { width: 375, height: 780 } });
   const pageM = await ctxM.newPage();
   await seedAuth(pageM, ta, ra.user);
-  await pageM.goto(`${WEB}/share/${pid}`, { waitUntil: 'domcontentloaded' });
-  await pageM.locator('.ft-wrap').waitFor({ state: 'visible', timeout: 20000 });
-  await pageM.locator('.ft-row', { hasText: 'README.md' }).click();
-  await pageM.locator('.fp-pre').waitFor({ state: 'visible', timeout: 15000 });
-  const boxTree = await pageM.locator('.ft-wrap').boundingBox();
-  const boxPrev = await pageM.locator('.fp-wrap').boundingBox();
-  ok('★ ⑩ 375px 下树与预览上下堆叠（预览在树下方，不并排挤成两条窄柱）',
-    !!boxTree && !!boxPrev && boxPrev.y >= boxTree.y + boxTree.height - 1);
+  await pageM.goto(`${WEB}${projHref}/blob/proj/src/deep/c.txt`, { waitUntil: 'domcontentloaded' });
+  await pageM.locator('.fp-pre').waitFor({ state: 'visible', timeout: 20000 });
   const overflow = await pageM.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  ok(`★ ⑩ 375px 下页面无横向溢出（长路径被省略号收住，overflow=${overflow}px）`, overflow <= 1);
-  ok('⑩ 375px 下副信息（体积/类型）让位隐藏', !(await pageM.locator('.ft-sub').first().isVisible()));
-  ok('⑩ 375px 下两栏折单栏（About 提到上方）',
-    (await pageM.locator('.gh-body').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)) === 1);
+  ok(`★ ⑩ 375px 下深层 /blob 页无横向溢出（长路径被省略号收住，overflow=${overflow}px）`, overflow <= 1);
+  ok('⑩ 375px 下两栏折单栏（About 提到正文上方）',
+    (await pageM.locator('.pv-body').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)) === 1);
   await pageM.screenshot({ path: SHOT('mobile375'), fullPage: true }).catch(() => {});
   ok(`已存移动端截图 ${SHOT('mobile375')}（供人工看观感）`, true);
   await ctxM.close();
@@ -259,9 +261,9 @@ try {
   const pageA = await (await browserA.newContext()).newPage();
   await seedAuth(pageA, ta, ra.user);
   await pageA.goto(`${WEB}/share/${gid}`, { waitUntil: 'domcontentloaded' });
-  const ghostErr = await pageA.locator('.gh-rstate.err').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
-  ok('★ ⑥ 普通用户直链幽灵项目详情 → 就地 404', ghostErr);
-  ok('★ ⑥ 幽灵项目页不留目录树（不泄露文件名）', (await pageA.locator('.ft-wrap').count()) === 0);
+  const ghostErr = await pageA.locator('.sr-err').waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
+  ok('★ ⑥ 普通用户直链幽灵项目 → 旧链中转层就地 404', ghostErr);
+  ok('★ ⑥ 幽灵项目页不留目录树（不泄露文件名）', (await pageA.locator('.pv-frow').count()) === 0);
 
   // ---------- 清理 ----------
   await browser.close(); browser = null;

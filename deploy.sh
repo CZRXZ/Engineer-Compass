@@ -46,3 +46,12 @@ echo "----- 部署完成 -----"
 curl -s http://localhost:3000/api/health || echo "⚠️ 后端 health 检查失败"
 echo
 echo "页面: http://服务器IP  |  AI 状态见上方 health 输出"
+echo
+# 资源分享已是 GitHub 风动态路由（/:用户名/:项目名/tree|blob/...），history 模式深链
+# 必须靠 Nginx 回退 index.html，否则项目页 F5 / 外发链接直接 404。
+if grep -q 'try_files.*index.html' /etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf 2>/dev/null; then
+  echo "✅ Nginx history 回退已配置（try_files → /index.html）"
+else
+  echo "⚠️  未检测到 Nginx history 回退！项目页 F5 会 404。"
+  echo "    请参考仓库内示例：docs/nginx-compass.conf.example（try_files \$uri \$uri/ /index.html;）"
+fi

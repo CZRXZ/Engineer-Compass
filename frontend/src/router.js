@@ -7,6 +7,11 @@ import StudyView from './components/StudyView.vue';
 import TeamView from './components/TeamView.vue';
 import ShareView from './components/ShareView.vue';
 import SharePostView from './components/SharePostView.vue';
+// GitHub 风资源路由：/:username 用户项目页、/:username/:slug(/tree|/blob) 项目页、
+// /share/:id 数字旧链中转盘（见各组件头注释；动态路由必须注册在所有静态路由之后）
+import UserProjectsView from './components/repo/UserProjectsView.vue';
+import ProjectView from './components/repo/ProjectView.vue';
+import ShareRedirectView from './components/repo/ShareRedirectView.vue';
 import ExpenseView from './components/ExpenseView.vue';
 import ExpenseGuide from './components/ExpenseGuide.vue';
 import PurchaseView from './components/purchase/PurchaseView.vue';
@@ -70,10 +75,8 @@ const router = createRouter({
     { path: '/study', redirect: '/schedule?tab=study' },
     { path: '/team', name: 'team', component: TeamView },
     { path: '/share', name: 'share', component: ShareView },
-    // 单条资源详情（独立子路由，不再在列表页下方展开 README）。
-    // 与 /share 是两个不同组件而不是同一个——同组件复用实例时 onMounted 不重跑，
-    // 从列表点进另一条帖会拿不到新数据。
-    { path: '/share/:id', name: 'share-post', component: SharePostView },
+    // 旧数字详情链：取到项目后 replace 到 /:username/:slug（消息通知/收藏/书签无感迁移）
+    { path: '/share/:id', name: 'share-post', component: ShareRedirectView },
     // 报销整理：队长/负责人建项目发邀请码，队员免登录认领填报（可带 ?code=xxx 直达项目）
     { path: '/expense', name: 'expense', component: ExpenseView },
     // 报销整理使用教程（静态文档页，任何人可看）
@@ -124,6 +127,14 @@ const router = createRouter({
         next();
       },
     },
+
+    // ===== GitHub 风动态路由：必须放最后，所有静态路径（/me /share /admin …）优先匹配 =====
+    // 不存在的用户名 → UserProjectsView 渲染 404 态（保留用户名注册时保留名拦截，见后端 RESERVED_USERNAMES）
+    { path: '/:username', name: 'user-projects', component: UserProjectsView },
+    { path: '/:username/:slug', name: 'project', component: ProjectView },
+    // 目录浏览 / 文件预览：pathMatch 让任意深度的项目内路径都落在同一个 ProjectView，由路由参数驱动
+    { path: '/:username/:slug/tree/:pathMatch(.*)*', name: 'project-tree', component: ProjectView },
+    { path: '/:username/:slug/blob/:pathMatch(.*)*', name: 'project-blob', component: ProjectView },
   ],
 });
 

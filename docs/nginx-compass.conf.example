@@ -1,0 +1,61 @@
+# Engineer-Compass Nginx 配置示例
+#
+# 前端用 vue-router 的 history 模式，且资源分享已改成 GitHub 风动态路由：
+#   /share、/:用户名、/:用户名/:项目名、/:用户名/:项目名/tree|blob/...
+# 这些路径在磁盘上都没有对应文件 —— 缺了 try_files 回退，
+# 用户在项目页按 F5（或直接外发深链）就会拿到 Nginx 的 404。
+#
+# 用法：拷到 /etc/nginx/conf.d/compass.conf（或 sites-available 软链），
+#       按实际域名/证书改 server_name 与证书路径，nginx -t 后 reload。
+
+server {
+    listen 80;
+    server_name compass.example.com;   # ← 改成实际域名或服务器 IP
+
+    # 前端构建产物（deploy.sh 发布到这里）
+    root /var/www/compass;
+    index index.html;
+
+    # API 反代到 PM2 守护的 Node 后端（默认端口 3000）
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # OAuth 回调（飞书/GitHub）可能经多层代理，保留原始协议
+        proxy_redirect off;
+    }
+
+    # ★ 关键：任何找不到实体文件的路径都回退到 index.html，
+    #   交给前端路由处理（/zhang3/probe-kit/tree/src 这类深链靠它成立）。
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 带 hash 的静态资源可放心长缓存；index.html 不缓存，保证发版即时生效
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    client_max_body_size 100m;   # 文件夹上传/发票图片的上限
+}
+
+# HTTPS（推荐）：80 整站 301 到 443，443 server 内复制上面的 location 配置即可：
+#
+# server {
+#     listen 443 ssl;
+#     server_name compass.example.com;
+#     ssl_certificate     /etc/letsencrypt/live/compass.example.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/compass.example.com/privkey.pem;
+#     # ……root / location 配置同上……
+# }
+# server {
+#     listen 80;
+#     server_name compass.example.com;
+#     return 301 https://$host$request_uri;
+# }

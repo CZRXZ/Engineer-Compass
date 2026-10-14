@@ -165,6 +165,11 @@ export const api = {
   // 资源分享（贴吧式板块）
   sharePosts: (params) => req(`/share/posts${qs(params)}`),
   sharePost: (id) => req(`/share/posts/${id}`),
+  // GitHub 风路由：用户项目页 / 单项目（payload 与 sharePost 完全一致）
+  shareUser: (username) => req(`/share/u/${encodeURIComponent(username)}`),
+  shareProject: (username, slug) => req(`/share/p/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`),
+  shareVisibility: (id, isPublic) =>
+    req(`/share/posts/${id}/visibility`, { method: 'POST', body: JSON.stringify({ is_public: isPublic ? 1 : 0 }) }),
   shareCreate: (card) => req('/share/posts', { method: 'POST', body: JSON.stringify(card) }),
   shareUpdate: (id, card) => req(`/share/posts/${id}`, { method: 'PUT', body: JSON.stringify(card) }),
   shareDelete: (id) => req(`/share/posts/${id}`, { method: 'DELETE' }),
@@ -188,6 +193,18 @@ export const api = {
   shareFileText: (fid) => req(`/share/files/${fid}/text`),
   // 整包下载地址：浏览器直连（无需请求头），公开帖匿名可用
   shareZipUrl: (id) => `${BASE}/share/posts/${id}/zip`,
+  // 私密项目整包下载：直连带不上 Authorization，走 fetch+blob（token 只进请求头，绝不进 URL）
+  shareZipBlob: async (id) => {
+    const token = localStorage.getItem('ec_token');
+    const res = await fetch(`${BASE}/share/posts/${id}/zip`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || `下载失败（${res.status}）`);
+    }
+    return res.blob();
+  },
   // 文件字节流：<img>/<video>/下载都不能带请求头，这里主动取 blob 再由前端造 objectURL。
   // **不走 ?token=** —— session token 进 URL 会被后端 access_log 原样记进 originalUrl（管理员可见）。
   // dl=true 走 ?dl=1（下载）；raw=true 走 /raw（Gitee 条目——它的字节不在本站磁盘上，

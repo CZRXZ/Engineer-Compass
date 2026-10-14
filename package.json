@@ -7,13 +7,17 @@
   "scripts": {
     "smoke:expense": "node scripts/smoke_expense.mjs",
     "smoke:purchase": "node scripts/smoke_purchase.mjs",
+    "smoke:sweep-safety": "node scripts/sweep_safety_check.mjs",
+    "smoke:account": "node scripts/smoke_account.mjs",
+    "smoke:repo": "node scripts/smoke_repo.mjs",
     "probe:claimlost": "node scripts/probe_claimlost.mjs",
     "probe:vision": "node scripts/probe_vision.mjs",
     "probe:share": "node scripts/probe_share.mjs",
     "probe:share-folder": "node scripts/probe_share_folder.mjs",
     "probe:share-gitee": "node scripts/probe_share_gitee.mjs",
     "probe:honor": "node scripts/probe_honor.mjs",
-    "probe:purchase-ui": "node scripts/probe_purchase_ui.mjs"
+    "probe:purchase-ui": "node scripts/probe_purchase_ui.mjs",
+    "probe:repo-ui": "node scripts/probe_repo_ui.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
