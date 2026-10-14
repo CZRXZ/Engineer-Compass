@@ -78,7 +78,10 @@ function normTags(raw) {
 // alias：帖子表在该查询里的别名（列表主查询 'p'，stats 聚合里 'sp'）—— 原实现硬编码 p.，聚合查询复用不了
 function ghostClause(req, scope, ghostOnly, alias = 'p') {
   if (scope) return '';
-  if (req.user?.is_admin) return ghostOnly ? `AND ${alias}.is_ghost = 1` : '';
+  // 普通大厅（/share）对所有人同口径：只见非幽灵帖——管理员巡检走后台 /admin/posts，
+  // 在这里放行会让管理员在「开源大厅」看到幽灵帖（与私密豁免同一类泄露观感）。
+  // /ghost-share（ghostOnly）才是幽灵帖的专属入口。
+  if (req.user?.is_admin) return ghostOnly ? `AND ${alias}.is_ghost = 1` : `AND ${alias}.is_ghost = 0`;
   if (req.user?.is_ghost) return ghostOnly ? `AND ${alias}.is_ghost = 1` : `AND ${alias}.is_ghost = 0`;
   return `AND ${alias}.is_ghost = 0`;
 }
@@ -103,10 +106,12 @@ function postVisible(req, p) {
   return true;
 }
 
-// 开源隔离条件：非「我的」视图只出开源帖；管理员例外（后台巡检口径，同幽灵帖处理）
+// 开源隔离条件：非「我的」视图只出开源帖，**管理员也不例外**
+// （大厅语义就是「开源大厅」；管理员巡检全量帖走后台 /admin/posts，否则管理员视角
+//  会在大厅看到他人 🔒 私密项目——私密帖只应出现在作者本人的「我的项目」里）
 function openClause(req, scope, alias = 'p') {
   if (scope === 'mine') return ''; // 本人看自己：公开私密全量
-  return req.user?.is_admin ? '' : `AND ${alias}.is_public = 1`;
+  return `AND ${alias}.is_public = 1`;
 }
 
 // 帖子的标签 + 作者信息 + 计数（列表/详情共用拼装）

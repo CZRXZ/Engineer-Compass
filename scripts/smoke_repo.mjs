@@ -217,6 +217,24 @@ try {
   ok('路人 B 自己项目页为空', g.data.total === 0 && Array.isArray(g.data.projects));
   g = await expect(`/share/p/${nameB}/${p3.slug}`, 404);
   ok('slug 在别的用户名下 404（owner 隔离）', g.ok);
+
+  // ---------- 11. 管理员在开源大厅同样只见开源帖（回归：私密项目曾因管理员豁免漏进大厅） ----------
+  {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(serverEnv.DB_PATH);
+    db.exec('PRAGMA busy_timeout=5000');
+    // fp 是 A 直接发的私密帖（第 8 节）；把 A 提为管理员后它仍不能出现在大厅
+    db.prepare('UPDATE user SET is_admin = 1 WHERE id = ?').run(rA.user.id);
+    db.close();
+    g = await req('/share/posts?size=50', { token: tA });
+    ok('★ 管理员视角大厅无私密项目（fp 不出现，全行 is_public=1）',
+      g.data.rows.every((x) => x.is_public === 1) && !g.data.rows.some((x) => x.id === fp.id),
+      g.data.rows?.map((x) => [x.id, x.is_public]));
+    ok('管理员大厅 stats 也不含私密/幽灵帖（posts=3）', g.data.stats.posts === 3, g.data.stats);
+    // 详情与「我的项目」仍可访问（巡检不受影响）
+    g = await expect(`/share/p/${nameA}/${fp.slug}`, 200, { token: tA });
+    ok('管理员/作者仍可直链私密项目 200', g.ok && g.data.is_public === 0);
+  }
 } catch (e) {
   fail++;
   console.error('💥 冒烟异常：', e.message);
