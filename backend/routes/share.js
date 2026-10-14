@@ -142,7 +142,8 @@ function bindStagedFiles(userId, postId, list) {
 // GET /api/share/posts — 列表：?sort=hot|new|fav&tag=名称&scope=mine|favs&page=&size=
 // scope=mine 只看我发的；scope=favs 看我收藏的（需登录）
 r.get('/posts', optionalAuth, (req, res) => {
-  const sort = SORTS[String(req.query.sort || 'hot')] || 'hot';
+  // 大厅默认按收藏数从高到低（无参直取 API 同口径）
+  const sort = SORTS[String(req.query.sort || 'fav')] || 'fav';
   const tag = String(req.query.tag || '').trim();
   const page = Math.max(1, Number(req.query.page) || 1);
   const size = Math.min(50, Math.max(1, Number(req.query.size) || 10));

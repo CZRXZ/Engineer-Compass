@@ -212,7 +212,7 @@ async function submit() {
       const isGhost = props.ghost ? 1 : (auth.user?.is_ghost ? (form.value.isGhost ? 1 : 0) : 0);
       res = await api.shareCreate({ title: form.value.title, content: form.value.content, attachments: form.value.atts, tags: form.value.tags, files: fileArg, is_ghost: isGhost, ...visArg, ...giteeArg });
       editingId.value = res.id;
-      ElMessage.success(props.ghost ? '👻 秘密帖子发布成功' : '🚀 开楼成功');
+      ElMessage.success(props.ghost ? '👻 秘密帖子发布成功' : '🚀 项目已发布');
     }
     // 帖子已保存，但 Gitee 没拉成功（限流/断网/仓库改名）：如实说一声，别让人以为仓库已经挂上了。
     // 正文与文件都已入库，用户可在详情页点「同步仓库」重试，不用重打一遍。
@@ -278,10 +278,10 @@ function onImported(html, id) {
 
 <template>
   <!-- 结构保持原样：App.vue 的 .editor-dlg .el-dialog__body > .el-select 是直接子元素选择器 -->
-  <el-dialog :model-value="modelValue" :title="editingId ? '✏️ 编辑帖子' : '📝 开楼发帖'" width="720px" top="3vh"
+  <el-dialog :model-value="modelValue" :title="editingId ? '✏️ 编辑项目' : '📤 项目上传'" width="720px" top="3vh"
     class="editor-dlg" :close-on-click-modal="false" destroy-on-close append-to-body
     @update:model-value="emit('update:modelValue', $event)">
-    <el-input v-model="form.title" maxlength="60" show-word-limit placeholder="帖子标题（≤60 字）" class="sh-title" />
+    <el-input v-model="form.title" maxlength="60" show-word-limit placeholder="项目标题（≤60 字）" class="sh-title" />
     <div class="sh-tools">
       <input ref="fileInput" type="file" multiple hidden @change="attPick" />
       <el-button size="small" @click="fileInput.click()">📎 附件（图片/视频/音频/文件）</el-button>

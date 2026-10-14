@@ -125,6 +125,8 @@ try {
 
   await page.goto(`${WEB}/share`, { waitUntil: 'domcontentloaded' });
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 20000 });
+  ok('★ 大厅冷启动默认按收藏数排序（排序按钮显示「收藏」）',
+    (await page.locator('.gh-sortbtn').innerText()).includes('收藏'));
   await switchToNewest(page);
 
   const rows = () => page.locator('.gh-row');
@@ -132,11 +134,16 @@ try {
   const titles = () => page.locator('.gh-row .gh-fname').allInnerTexts();
   const badgeNum = async (i) => numOf(await page.locator('.gh-badge').nth(i).innerText());
 
-  // ① 仓库头（GitHub 化后：开源资料大厅）
-  ok('① 仓库头面包屑渲染（Engineer-Compass / 开源资料）',
-    (await page.locator('.gh-crumb:has-text("Engineer-Compass")').count()) === 1
-    && (await page.locator('.gh-crumb:has-text("开源资料")').count()) === 1);
-  ok('① 板块描述渲染', (await page.locator('.gh-desc').first().innerText()).includes('开源项目大厅'));
+  // ① 大厅头：大标题（不展示仿路由面包屑）+ 上传/我的按钮 + 默认收藏序
+  ok('① 大厅大标题渲染（开源资料大厅，无 Engineer-Compass 仿路由面包屑）',
+    (await page.locator('.gh-title', { hasText: '开源资料大厅' }).count()) === 1
+    && (await page.locator('.gh-crumb').count()) === 0);
+  ok('① 头部按钮：我的项目 + 项目上传',
+    (await page.locator('.gh-actions button', { hasText: '我的项目' }).count()) === 1
+    && (await page.locator('.gh-actions button', { hasText: '项目上传' }).count()) === 1);
+  ok('① 板块描述渲染（不含路由字样）',
+    (await page.locator('.gh-desc').first().innerText()).includes('开源共享')
+    && !(await page.locator('.gh-desc').first().innerText()).includes('/用户名'));
   ok(`① 徽标「资源数」= API stats.posts（UI ${await badgeNum(0)} / API ${stats.posts}）`, (await badgeNum(0)) === Number(stats.posts));
   ok(`① 徽标「点赞」= API stats.likes（UI ${await badgeNum(1)} / API ${stats.likes}）`, (await badgeNum(1)) === Number(stats.likes));
   ok(`① 徽标「收藏」= API stats.favs（UI ${await badgeNum(2)} / API ${stats.favs}）`, (await badgeNum(2)) === Number(stats.favs));
@@ -257,6 +264,8 @@ try {
   // ⑦d 连续点两行（站内第二次选中：列表 → 详情 → 返回 → 另一条帖）
   await page.goto(`${WEB}/share`, { waitUntil: 'domcontentloaded' });
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 20000 });
+  ok('★ 大厅冷启动默认按收藏数排序（排序按钮显示「收藏」）',
+    (await page.locator('.gh-sortbtn').innerText()).includes('收藏'));
   await switchToNewest(page);
   await rowOf(T_TXT).locator('.gh-fname').click();
   await page.waitForFunction((s) => document.querySelector('.gh-readme .gh-rfile')?.innerText.includes(s), T_TXT, { timeout: 10000 }).catch(() => {});
@@ -281,6 +290,8 @@ try {
   await page.setViewportSize({ width: 1280, height: 420 });
   await page.goto(`${WEB}/share`, { waitUntil: 'domcontentloaded' });
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 20000 });
+  ok('★ 大厅冷启动默认按收藏数排序（排序按钮显示「收藏」）',
+    (await page.locator('.gh-sortbtn').innerText()).includes('收藏'));
   await switchToNewest(page);
   await page.waitForFunction(() => document.querySelectorAll('.gh-row').length >= 10, null, { timeout: 15000 }).catch(() => {});
   ok('⑦e 列表满一页时可滚动（矮视口下必然溢出）',
@@ -325,6 +336,8 @@ try {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(`${WEB}/share`, { waitUntil: 'domcontentloaded' });
   await page.locator('.gh-filebox').waitFor({ state: 'visible', timeout: 20000 });
+  ok('★ 大厅冷启动默认按收藏数排序（排序按钮显示「收藏」）',
+    (await page.locator('.gh-sortbtn').innerText()).includes('收藏'));
   await switchToNewest(page);
   // 列是 display:none 藏起来的（DOM 里仍在），所以断言可见性而不是节点数
   const vis = (sel) => page.locator(sel).first().isVisible();

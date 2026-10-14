@@ -99,7 +99,7 @@ const projectHref = (p) => `/${encodeURIComponent(username.value)}/${encodeURICo
         </article>
 
         <div v-if="!loading && !projects.length" class="up-empty">
-          <p>{{ isSelf ? '你还没有发布项目，去开源大厅开第一个楼' : '这个用户还没有公开项目' }}</p>
+          <p>{{ isSelf ? '你还没有上传过项目，去开源大厅点「项目上传」分享第一个' : '这个用户还没有公开项目' }}</p>
           <router-link v-if="isSelf" class="up-btn" to="/share">📝 去发布</router-link>
         </div>
       </section>

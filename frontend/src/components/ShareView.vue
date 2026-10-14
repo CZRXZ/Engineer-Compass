@@ -1,8 +1,8 @@
 <script setup>
-// 资源分享（GitHub 仓库页形态）：仓库头 + 标签页 + 文件表 + About 侧栏
-// 一条帖子 = 文件表里的一行；**点行 → 跳 /share/:id 独立详情页**（不再在下方展开 README）
-// tabs：资源(全部) / 我的帖子 / 我的收藏 —— 复用后端已有的 scope=mine|favs
-// 幽灵页（/ghost-share）：只留「资源」一个静态标签 + 排序，不发 scope（scope 会绕过幽灵隔离）
+// 开源资料大厅：大标题（不展示仿路由面包屑）+ 文件表 + About 侧栏
+// 一条帖子 = 文件表里的一行；**点行 → 跳 /:username/:slug 项目页**
+// tabs：全部开源 / 我的收藏（scope=favs）；「我的项目」是头部按钮（scope=mine，含私密+行内开源开关）
+// 默认按收藏数从高到低；幽灵页（/ghost-share）：只留一个静态标签 + 排序，不发 scope（scope 会绕过幽灵隔离）
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -19,15 +19,16 @@ const route = useRoute();
 const props = defineProps({ ghost: { type: Boolean, default: false } });
 
 // —— 视图：标签页 + 排序 + 标签子板块 + 分页 ——
+// 「我的项目」不在标签页里 —— 入口是头部「项目上传」旁的我的按钮
 const TABS = [
   { key: 'all', full: '🌍 全部开源', short: '开源' },
-  { key: 'mine', full: '📝 我的', short: '我的' },
   { key: 'favs', full: '⭐ 我的收藏', short: '收藏' },
 ];
+// 大厅默认按收藏数从高到低
 const SORTS = [
+  { key: 'fav', full: '⭐ 收藏最高', short: '收藏' },
   { key: 'hot', full: '🔥 最热门', short: '最热' },
   { key: 'new', full: '🕐 最新', short: '最新' },
-  { key: 'fav', full: '⭐ 收藏最高', short: '收藏' },
 ];
 
 // 详情页返回时的列表状态缓存：/share → /share/:id 是两个不同组件，后退时列表重挂载、
@@ -46,6 +47,7 @@ const loading = ref(false);
 const tagList = ref([]);
 const filterText = ref(''); // 文件表筛选框（只筛当前页，后端无搜索接口）
 const scope = computed(() => (props.ghost || tab.value === 'all' ? '' : tab.value)); // 幽灵页恒不发 scope
+const inMine = computed(() => !props.ghost && tab.value === 'mine');
 
 // matchMedia 监听用具名函数 + onBeforeUnmount 移除（旧实现传匿名函数，切路由会累积监听器）
 const mqNarrow = window.matchMedia('(max-width: 768px)');
@@ -81,11 +83,19 @@ async function loadTags() {
   try { tagList.value = await api.shareTags(); } catch { /* 标签加载失败不阻塞列表 */ }
 }
 
-// 切「我的帖子/我的收藏」：未登录后端必 401 → 提前拦截并引导，且**不切 tab**（否决式）
+// 切「我的收藏」：未登录后端必 401 → 提前拦截并引导，且**不切 tab**（否决式）
 function changeTab(k) {
   if (k === tab.value) return;
   if (k !== 'all' && needLogin()) return;
   tab.value = k;
+  page.value = 1;
+  load();
+}
+// 头部「我的项目」按钮：进/出我的项目视图（含私密项目，可行内开关开源）
+function goMine() {
+  if (inMine.value) { tab.value = 'all'; page.value = 1; load(); return; }
+  if (needLogin()) return;
+  tab.value = 'mine';
   page.value = 1;
   load();
 }
@@ -174,25 +184,27 @@ async function onDialogChanged({ id: pid, isNew } = {}) {
   await load(); await loadTags();
 }
 
-const emptyText = computed(() => (tag.value
-  ? `「${tag.value}」子板块还没有帖子，来开第一楼`
-  : (props.ghost ? '还没有秘密帖子，来开第一座幽灵楼' : '还没有帖子，点「开楼发帖」分享第一个资源')));
+const emptyText = computed(() => (inMine.value
+  ? '你还没有上传过项目，点右上角「项目上传」分享第一个资源'
+  : tag.value
+    ? `「${tag.value}」子板块还没有项目，来上传第一个`
+    : (props.ghost ? '还没有秘密帖子，来发第一座幽灵楼' : '还没有开源项目，点右上角「项目上传」成为第一个分享者')));
 
 onMounted(() => { load(); loadTags(); });
 </script>
 
 <template>
   <main class="share-page">
-    <!-- 仓库头：面包屑 + 标题 + 描述 + 徽标 + 主按钮 -->
+    <!-- 大厅头：大标题（不展示仿路由面包屑）+ 描述 + 徽标 + 我的/上传按钮 -->
     <header class="gh-repohead">
-      <div class="gh-crumb">
-        <GhIcon name="book" :size="16" />
-        <router-link class="gh-owner" to="/">Engineer-Compass</router-link>
-        <span class="gh-sep">/</span>
-        <b>{{ props.ghost ? '秘密分享' : '开源资料' }}</b>
-        <span class="gh-vis">{{ props.ghost ? '🔒 仅怪奇可见' : '大厅' }}</span>
+      <div class="gh-title-row">
+        <h1 class="gh-title">{{ props.ghost ? '🔒 秘密分享' : '📚 开源资料大厅' }}</h1>
+        <div class="gh-actions">
+          <el-button v-if="!ghost" type="primary" :plain="!inMine" @click="goMine">📝 我的项目</el-button>
+          <el-button type="primary" @click="openNew">{{ props.ghost ? '👻 开幽灵帖' : '📤 项目上传' }}</el-button>
+        </div>
       </div>
-      <p class="gh-desc">{{ props.ghost ? '怪奇小队专属领地：幽灵帖仅幽灵可见，普通世界完全无痕' : '全站用户的开源项目大厅：一条帖子 = 一个项目，点作者名进 TA 的主页，点项目名进 /用户名/项目名 目录路由' }}</p>
+      <p class="gh-desc">{{ props.ghost ? '怪奇小队专属领地：幽灵帖仅幽灵可见，普通世界完全无痕' : '全站用户开源共享的备赛资料、经验与作品；点作者名进 TA 的主页，点项目名在线浏览目录与文件' }}</p>
       <div class="gh-headrow">
         <div class="gh-badges">
           <span class="gh-badge"><GhIcon name="file" :size="14" /> {{ stats.posts }} 个资源</span>
@@ -201,7 +213,6 @@ onMounted(() => { load(); loadTags(); });
           <span class="gh-badge"><GhIcon name="comment" :size="14" /> {{ stats.comments }}</span>
           <span class="gh-badge"><GhIcon name="tag" :size="14" /> {{ tagList.length }} 个标签</span>
         </div>
-        <el-button type="primary" @click="openNew">{{ props.ghost ? '👻 开幽灵帖' : '📝 开楼发帖' }}</el-button>
       </div>
     </header>
 
@@ -228,6 +239,12 @@ onMounted(() => { load(); loadTags(); });
       </el-dropdown>
     </div>
 
+    <!-- 「我的项目」视图提示条（头部按钮进入，含私密项目） -->
+    <div v-if="inMine" class="gh-minebar">
+      <span>📝 我的项目<em>含 🔒 私密项目，行内开关可直接切换开源</em></span>
+      <button class="gh-filterx" @click="goMine">返回大厅</button>
+    </div>
+
     <!-- 两栏主体：左 = 文件表；右 = About -->
     <div class="gh-body">
       <div class="gh-main">
@@ -252,7 +269,7 @@ onMounted(() => { load(); loadTags(); });
       <aside class="gh-aside">
         <div class="gh-abox">
           <div class="gh-ahead">About</div>
-          <p class="gh-atext">{{ props.ghost ? '幽灵帖仅幽灵账号可见，普通用户完全看不到这里的内容。' : '分享备赛资料、经验与作品。一条帖子就是一行资源，点行进入该资源的详情页（正文 / 附件 / 讨论）。' }}</p>
+          <p class="gh-atext">{{ props.ghost ? '幽灵帖仅幽灵账号可见，普通用户完全看不到这里的内容。' : '全站用户开源共享的备赛资料与作品：点项目名在线浏览目录与文件，正文、附件与讨论都在项目页里。' }}</p>
         </div>
         <div class="gh-abox">
           <div class="gh-ahead">Topics</div>
@@ -272,26 +289,25 @@ onMounted(() => { load(); loadTags(); });
 </template>
 
 <style lang="scss" scoped>
-.share-page { padding: 20px 24px 60px; max-width: 1180px; margin: 0 auto; }
+.share-page { padding: 30px 28px 70px; max-width: 1220px; margin: 0 auto; }
 
-// —— 仓库头 ——
-.gh-repohead { margin-bottom: 14px; }
-.gh-crumb {
-  display: flex; align-items: center; gap: 7px; font-size: 18px; color: var(--text-2);
-  .gh-owner { color: var(--primary); cursor: pointer; text-decoration: none; &:hover { text-decoration: underline; } }
-  .gh-sep { color: var(--text-3); }
-  b { color: var(--primary); font-weight: 600; }
-  .gh-vis {
-    margin-left: 6px; font-size: 11.5px; color: var(--text-2);
-    border: 1px solid var(--border-2); border-radius: 999px; padding: 1px 9px;
-  }
+// —— 大厅头 ——
+.gh-repohead { margin-bottom: 18px; }
+.gh-title-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
 }
-.gh-desc { margin: 6px 0 10px; color: var(--text-2); font-size: 13px; }
+.gh-title {
+  display: flex; align-items: center; gap: 10px; margin: 0;
+  font-size: 27px; font-weight: 700; letter-spacing: .5px; color: var(--text);
+  svg { color: var(--primary); }
+}
+.gh-actions { display: flex; align-items: center; gap: 10px; }
+.gh-desc { margin: 10px 0 14px; color: var(--text-2); font-size: 14px; }
 .gh-headrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.gh-badges { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.gh-badges { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .gh-badge {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12.5px; color: var(--text-2);
+  font-size: 13px; color: var(--text-2);
   b { color: var(--text); }
 }
 
@@ -323,7 +339,7 @@ onMounted(() => { load(); loadTags(); });
 .gh-body { display: grid; grid-template-columns: minmax(0, 1fr) 288px; gap: 20px; align-items: start; }
 .gh-main { min-width: 0; }
 
-.gh-filterbar {
+.gh-filterbar, .gh-minebar {
   display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
   font-size: 12.5px; color: var(--text-2);
   b { color: var(--primary); }
@@ -332,6 +348,14 @@ onMounted(() => { load(); loadTags(); });
     color: var(--text-2); border-radius: 6px; padding: 3px 9px; font-size: 12px;
     cursor: pointer; font-family: inherit;
     &:hover { border-color: var(--primary); color: var(--primary); }
+  }
+}
+.gh-minebar {
+  margin: -4px 0 14px; padding: 9px 14px; border-radius: 8px;
+  background: var(--primary-tint); color: var(--primary); font-size: 13px;
+  em { font-style: normal; color: var(--text-2); margin-left: 8px; font-size: 12.5px; }
+  .gh-filterx {
+    background: var(--card-bg); color: var(--primary); border-color: var(--primary);
   }
 }
 .gh-pager { margin-top: 14px; justify-content: center; }
@@ -363,8 +387,9 @@ onMounted(() => { load(); loadTags(); });
   .gh-aside { order: -1; }
 }
 @media (max-width: 768px) {
-  .share-page { padding: 14px 12px 60px; }
-  .gh-crumb { font-size: 16px; }
+  .share-page { padding: 18px 12px 60px; }
+  .gh-title { font-size: 21px; }
+  .gh-actions { width: 100%; .el-button { flex: 1; margin-left: 0; } }
   .gh-badge:nth-child(n + 4) { display: none; } /* 徽标瘦身，留资源数/赞/藏 */
 }
 </style>

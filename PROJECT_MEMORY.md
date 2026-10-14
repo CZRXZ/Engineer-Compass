@@ -447,4 +447,5 @@ YOLOv8 训练识别 16 类物品：青椒、白菜、黄瓜、豆腐、茄子、
 - **★ 路由复用两个坑**：① 同组件不同参数复用靠 watch $route（onMounted 不重跑）；② 大厅 `.gh-row` 网格行**中间点会落在 `.c-author` 列触发作者跳转**，探针点标题必须用 `.gh-fname`
 - **★ 认证字节流口径不变**：私密文件下载仍是 fetch+blob 带 Authorization 头转 objectURL，**token 永远不进 URL/query**
 - **部署**：history 动态路由要求 Nginx `try_files $uri $uri/ /index.html;`，否则项目页 F5 404 → 新增 `docs/nginx-compass.conf.example`（含 /api 反代、缓存、100m 上传），deploy.sh 结尾自动 grep 检测并提醒
+- **大厅页二次调整（用户口径）**：大厅头不展示仿路由面包屑（改大标题「📚 开源资料大厅」）；列表**默认按收藏数倒序**（前端 shareKeep + 后端无参默认都改 `fav`，SORTS 收藏/最热/最新）；「我的」从 tab 移出，改为头部「项目上传」旁的 **📝 我的项目** 按钮（再点返回大厅，进 scope=mine 时显示提示条）；tab 只剩 全部开源/我的收藏；主按钮与发帖弹窗改名 **📤 项目上传**（弹窗标题/标题占位/Toast 同步去「帖子/开楼」措辞）；表格行 54px 更宽松
 - **测试（全绿）**：`smoke:account` 52/52（迁移/改密/重置/手机/未配置 GitHub/提醒补发）、`smoke:repo` 46/46（slug/可见性/枚举 404）、`probe:repo-ui` **44/44**（自起 3108+5199：路由下钻+面包屑回跳+F5+旧链 replace+开关开源+改密全链+管理员提醒+系统通知+390px；response 监听需放行 favicon 与**有意的 /api/share/p/ 404**）、`probe:share` 56/56、`probe:share-folder` 35/35（冷启动改断言 /share/:id→规范路由、根仅 proj、/tree 逐级、/blob 预览、幽灵走 .sr-err 中转层、暗色 /ghost-share 旧链不变）、`smoke:purchase` 102/102 回归、`vite build` 通过

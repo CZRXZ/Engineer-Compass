@@ -105,7 +105,7 @@ const stamp = (p) => p.update_time || p.create_time;
   overflow: hidden;
 }
 
-.gh-fhead { padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-1); }
+.gh-fhead { padding: 11px 16px; border-bottom: 1px solid var(--border); background: var(--surface-1); }
 .gh-search {
   display: flex; align-items: center; gap: 6px;
   border: 1px solid var(--border-2); border-radius: 6px; background: var(--card-bg);
@@ -125,16 +125,16 @@ const stamp = (p) => p.update_time || p.create_time;
 .gh-thead, .gh-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 110px 204px 100px;
-  gap: 10px; align-items: center; padding: 0 14px;
+  gap: 12px; align-items: center; padding: 0 18px;
 }
 .gh-thead {
-  height: 36px; font-size: 12px; color: var(--text-2);
+  height: 42px; font-size: 12.5px; color: var(--text-2);
   background: var(--surface-1); border-bottom: 1px solid var(--border);
 }
 .gh-tbody { min-height: 120px; }
 
 .gh-row {
-  height: 44px; font-size: 13px; color: var(--text-2);
+  height: 54px; font-size: 14px; color: var(--text-2);
   border-bottom: 1px solid var(--border); cursor: pointer;
   &:last-of-type { border-bottom: 0; }
   &:hover { background: var(--surface-1); }

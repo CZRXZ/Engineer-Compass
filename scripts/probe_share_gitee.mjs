@@ -111,7 +111,7 @@ try {
 
   // 在真界面里发帖：填标题 + 仓库 + 拉预览
   await page.goto(`${WEB}/share`, { waitUntil: 'domcontentloaded' });
-  await page.locator('button', { hasText: /开楼发帖|开幽灵帖/ }).first().click();
+  await page.locator('button', { hasText: /项目上传|开幽灵帖/ }).first().click();
   await page.locator('.sh-title input').first().fill(T_POST);
   await page.locator('.gt-repo input').fill(`https://gitee.com/${REPO}/tree/master/`);
   await page.locator('button', { hasText: '拉取预览' }).click();

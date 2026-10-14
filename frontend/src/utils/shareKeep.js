@@ -8,7 +8,7 @@
 //
 // 首屏用缓存同步初始化即可立刻画出满高页面（滚动还原才落得回去），随后 load() 静默刷新覆盖。
 // 幽灵页与普通页各存一份——共用同一个桶会把幽灵帖漏进普通列表。
-export const newKeep = () => ({ rows: [], total: 0, stats: null, tab: 'all', sort: 'hot', tag: '', page: 1 });
+export const newKeep = () => ({ rows: [], total: 0, stats: null, tab: 'all', sort: 'fav', tag: '', page: 1 });
 
 const BUCKETS = { normal: newKeep(), ghost: newKeep() };
 

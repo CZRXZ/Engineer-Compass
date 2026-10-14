@@ -180,8 +180,10 @@ try {
   await gotoWaitList('/share');
   const hallRow = page.locator('.gh-row', { hasText: title });
   await hallRow.waitFor({ timeout: 10000 });
-  ok('大厅有「全部开源」标签',
-    (await page.locator('.gh-tab').allInnerTexts()).some((t) => t.includes('全部开源')));
+  ok('大厅有「全部开源」标签 + 头部「项目上传」按钮（无仿路由面包屑）',
+    (await page.locator('.gh-tab').allInnerTexts()).some((t) => t.includes('全部开源'))
+    && (await page.locator('.gh-actions button', { hasText: '项目上传' }).count()) === 1
+    && (await page.locator('.gh-crumb').count()) === 0);
   // 显式点标题格：行中心点在当前列宽下会落在「作者」列（作者名跳用户主页）
   await hallRow.locator('.gh-fname').click();
   await page.waitForURL(`**${projectUrl}`, { timeout: 8000 });
@@ -245,7 +247,12 @@ try {
   // ===== 7. 作者：「我的」行内开关转私密 =====
   await authAs(A);
   await gotoWaitList('/share');
-  await page.getByRole('tab', { name: '📝 我的' }).click();
+  // 「我的」入口已移到头部「项目上传」旁；点击后 scope=mine 重新拉列表
+  {
+    const pMine = page.waitForResponse((r) => r.url().includes('/share/posts?') && r.url().includes('scope=mine'), { timeout: 10000 });
+    await page.getByRole('button', { name: '📝 我的项目' }).click();
+    await pMine;
+  }
   await page.locator('.gh-row', { hasText: title }).waitFor();
   const myRow = page.locator('.gh-row', { hasText: title });
   await myRow.locator('.el-switch').click();
