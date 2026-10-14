@@ -2,7 +2,7 @@
 // 「我的」个人中心：账号信息 + 数据概览（备赛/学习计划、小组）+ 快捷入口 + 退出登录
 // 四个标签：概览 / 我的帖子 / 我的收藏 / 好友私聊（好友申请、删除、私信轮询）
 // 未登录时内嵌 AuthView 完成登录
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '../api.js';
@@ -11,8 +11,6 @@ import { cnt, excerpt, firstImage, attDataURL } from '../utils/share.js';
 import AuthView from './AuthView.vue';
 import DmDialog from './DmDialog.vue'; // 公共私聊弹窗（3s 轮询，关闭即停）
 import { fmtDateTime } from '../utils/time.js';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const router = useRouter();
 // 小组角色摘要：组长显示「组长 · 角色」（组长也可多角色），普通成员显示角色名/组员
@@ -116,48 +114,7 @@ async function saveNick() {
   } catch (err) { ElMessage.error(err.message); }
 }
 
-// ---- 邮箱绑定 / 更换（新邮箱验证码校验，purpose=bind） ----
-const mailDlg = ref(false);
-const mailVal = ref('');
-const mailCode = ref('');
-const mailSending = ref(false);
-const mailCountdown = ref(0);
-let mailTimer = null;
-function openMail() {
-  mailVal.value = auth.user?.email || '';
-  mailCode.value = '';
-  mailDlg.value = true;
-}
-async function sendBindCode() {
-  const mail = mailVal.value.trim();
-  if (!EMAIL_RE.test(mail)) return ElMessage.warning('请输入正确的邮箱地址');
-  mailSending.value = true;
-  try {
-    const res = await api.sendCode(mail, 'bind');
-    if (res.dev_code) {
-      mailCode.value = res.dev_code;
-      ElMessage.success(`开发模式验证码：${res.dev_code}（配置 SMTP 后改为邮件发送）`);
-    } else {
-      ElMessage.success('验证码已发送到新邮箱，10 分钟内有效');
-    }
-    mailCountdown.value = 60;
-    mailTimer = setInterval(() => {
-      if (--mailCountdown.value <= 0) { clearInterval(mailTimer); mailTimer = null; }
-    }, 1000);
-  } catch (err) { ElMessage.error(err.message); }
-  finally { mailSending.value = false; }
-}
-async function saveMail() {
-  const mail = mailVal.value.trim();
-  if (!EMAIL_RE.test(mail)) return ElMessage.warning('请输入正确的邮箱地址');
-  if (!/^\d{6}$/.test(mailCode.value.trim())) return ElMessage.warning('请输入 6 位数字验证码');
-  try {
-    const res = await api.bindEmail({ email: mail, code: mailCode.value.trim() });
-    patchUser(res.user);
-    mailDlg.value = false;
-    ElMessage.success('邮箱已更新，下次可用新邮箱登录');
-  } catch (err) { ElMessage.error(err.message); }
-}
+// 邮箱 / 手机号 / 飞书 / GitHub / 密码统一在「账号安全」页管理（/account-security）
 
 // ---- 意见反馈（存库 + 邮件转发管理员） ----
 const fbContent = ref('');
@@ -376,53 +333,9 @@ function deepLink() {
     }
   }
 }
-// ---- 飞书绑定（P0：每用户绑定；一个飞书账号可绑定多个网页账号） ----
-// 授权在飞书页面完成，回调页 window.opener.postMessage 通知 → 此处监听并刷新状态
-const feishu = ref({ bound: false, loading: false });
-const feishuListener = (e) => {
-  if (e.data?.type === 'feishu-bound') {
-    ElMessage.success('✅ 飞书绑定成功');
-    loadFeishu();
-  }
-};
-async function loadFeishu() {
-  if (!auth.token) return;
-  try {
-    feishu.value = { ...(await api.feishuStatus()), loading: false };
-  } catch { feishu.value = { bound: false, loading: false }; }
-}
-async function bindFeishu() {
-  feishu.value.loading = true;
-  try {
-    const { url } = await api.feishuAuth();
-    if (!url) throw new Error('飞书未配置，请联系管理员');
-    window.open(url, '_blank'); // 不用 noopener：回调页需 postMessage 通知绑定结果
-  } catch (e) {
-    ElMessage.error(e.message);
-    feishu.value.loading = false;
-  }
-}
-async function unbindFeishu() {
-  await ElMessageBox.confirm('解绑后本账号将无法使用飞书文档编辑与分享功能，确定解绑？', '解绑飞书', { type: 'warning' });
-  feishu.value.loading = true;
-  try {
-    await api.feishuUnbind();
-    ElMessage.success('已解绑飞书账号');
-  } finally {
-    feishu.value.loading = false;
-    loadFeishu();
-  }
-}
-
 onMounted(() => {
   load();
   deepLink();
-  window.addEventListener('message', feishuListener);
-  loadFeishu();
-});
-onBeforeUnmount(() => {
-  window.removeEventListener('message', feishuListener);
-  if (mailTimer) clearInterval(mailTimer);
 });
 </script>
 
@@ -448,10 +361,11 @@ onBeforeUnmount(() => {
         <p class="me-mail">
           <template v-if="auth.user?.email">📧 {{ auth.user.email }}</template>
           <template v-else>📧 未绑定邮箱</template>
-          <a class="mail-bind" @click="openMail">{{ auth.user?.email ? '🔄 更换邮箱' : '🔗 绑定邮箱' }}</a>
+          <router-link to="/account-security" class="mail-bind">🔐 账号安全中管理</router-link>
         </p>
       </div>
       <div class="me-actions">
+        <el-button type="primary" plain @click="router.push('/account-security')">🔐 账号安全</el-button>
         <el-button type="danger" plain @click="logout">退出登录</el-button>
       </div>
     </section>
@@ -465,26 +379,7 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <!-- 绑定 / 更换邮箱弹窗（新邮箱验证码校验） -->
-    <el-dialog v-model="mailDlg" :title="auth.user?.email ? '更换邮箱' : '绑定邮箱'" width="440px" destroy-on-close>
-      <el-form label-position="top" @submit.prevent>
-        <el-form-item label="新邮箱（用于登录与接收验证码）">
-          <el-input v-model="mailVal" placeholder="you@example.com" />
-        </el-form-item>
-        <el-form-item label="验证码">
-          <div class="code-row">
-            <el-input v-model="mailCode" maxlength="6" placeholder="6 位验证码" />
-            <el-button :disabled="mailCountdown > 0" :loading="mailSending" @click="sendBindCode" style="width: 150px; flex-shrink: 0">
-              {{ mailCountdown > 0 ? `${mailCountdown}s 后重发` : '发送验证码' }}
-            </el-button>
-          </div>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="mailDlg = false">取消</el-button>
-        <el-button type="primary" @click="saveMail">确认{{ auth.user?.email ? '更换' : '绑定' }}</el-button>
-      </template>
-    </el-dialog>
+    <!-- 邮箱/密码/手机/飞书/GitHub 管理已移至「账号安全」页（与退出登录同级入口） -->
 
     <!-- 四个标签：概览 / 我的帖子 / 我的收藏 / 好友私聊 -->
     <el-tabs v-model="tab" class="me-tabs">
@@ -547,28 +442,12 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <!-- 飞书绑定（P0：每用户绑定，文档编辑 / 资源分享走飞书） -->
-          <section class="me-block">
-            <h3>
-              🪶 飞书账号
-              <el-tag size="small" :type="feishu.bound ? 'success' : 'info'" style="margin-left:6px">
-                {{ feishu.bound ? '已绑定' : '未绑定' }}
-              </el-tag>
-            </h3>
-            <p class="fb-tip">绑定飞书后，日程笔记 / 进度汇报 / 分享帖可直接在飞书文档里编辑，资源分享可从飞书引出链接</p>
-            <div v-if="feishu.bound" class="feishu-bound">
-              <el-avatar :src="feishu.avatar_url" :size="40" style="flex-shrink:0">{{ feishu.user_name?.[0] }}</el-avatar>
-              <div class="feishu-info">
-                <b>{{ feishu.user_name || '飞书用户' }}</b>
-                <span class="feishu-sub">授权有效约 {{ Math.max(0, Math.floor((feishu.expires_in || 0) / 60)) }} 分钟 · 过期自动刷新</span>
-              </div>
-            </div>
+          <!-- 账号安全（飞书/GitHub/密码/邮箱/手机统一入口，与「退出登录」同级也有入口） -->
+          <section class="me-block fb-block">
+            <h3>🔐 账号安全</h3>
+            <p class="fb-tip">修改密码、更换邮箱、绑定手机号、关联飞书 / GitHub 账号</p>
             <div class="fb-foot">
-              <el-button v-if="!feishu.bound" type="primary" :loading="feishu.loading" @click="bindFeishu">🔗 绑定飞书账号</el-button>
-              <template v-else>
-                <el-button type="success" plain @click="loadFeishu">🔄 刷新状态</el-button>
-                <el-button type="danger" plain :loading="feishu.loading" @click="unbindFeishu">解绑</el-button>
-              </template>
+              <el-button type="primary" plain @click="router.push('/account-security')">进入账号安全中心</el-button>
             </div>
           </section>
 
@@ -859,17 +738,6 @@ onBeforeUnmount(() => {
   .fb-tip { margin: 0 0 10px; font-size: 12.5px; color: var(--text-2); }
   .fb-foot { margin-top: 10px; display: flex; justify-content: flex-end; }
 }
-
-// 飞书绑定卡
-.feishu-bound {
-  display: flex; align-items: center; gap: 12px;
-  background: var(--card-bg); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px 14px;
-  .feishu-info { display: flex; flex-direction: column; gap: 2px; }
-  .feishu-sub { font-size: 12px; color: var(--text-2); }
-}
-
-.code-row { display: flex; gap: 8px; width: 100%; }
 
 // —— 我的帖子 / 收藏 ——
 .mp-list { display: flex; flex-direction: column; gap: 10px; min-height: 120px; }

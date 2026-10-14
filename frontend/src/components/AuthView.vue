@@ -96,7 +96,69 @@ async function submit() {
   }
 }
 
-onBeforeUnmount(() => { if (timer) clearInterval(timer); });
+// ---- 忘记密码（公开流：邮箱 + purpose=reset 验证码 + 新密码）----
+// 邮箱是否已注册由后端防枚举统一返回；成功后弹窗关闭，用户用新密码登录
+const resetDlg = ref(false);
+const resetForm = ref({ email: '', code: '', password: '', password2: '' });
+const resetCountdown = ref(0);
+const resetSending = ref(false);
+const resetSaving = ref(false);
+let resetTimer = null;
+
+function openReset() {
+  // 默认带出登录表单里已填的邮箱，少输一次
+  resetForm.value = { email: form.value.email || '', code: '', password: '', password2: '' };
+  resetDlg.value = true;
+}
+async function sendResetCode() {
+  const mail = resetForm.value.email.trim();
+  if (!EMAIL_RE.test(mail)) return ElMessage.warning('请输入正确的邮箱地址');
+  resetSending.value = true;
+  try {
+    const res = await api.sendCode(mail, 'reset');
+    if (res.dev_code) {
+      resetForm.value.code = res.dev_code;
+      ElMessage.success(`开发模式验证码：${res.dev_code}（配置 SMTP 后改为邮件发送）`);
+    } else {
+      ElMessage.success('验证码已发送到邮箱，10 分钟内有效');
+    }
+    resetCountdown.value = 60;
+    resetTimer = setInterval(() => {
+      if (--resetCountdown.value <= 0) { clearInterval(resetTimer); resetTimer = null; }
+    }, 1000);
+  } catch (e) {
+    ElMessage.error(e.message);
+  } finally {
+    resetSending.value = false;
+  }
+}
+async function submitReset() {
+  const f = resetForm.value;
+  const mail = f.email.trim();
+  if (!EMAIL_RE.test(mail)) return ElMessage.warning('请输入正确的邮箱地址');
+  if (!/^\d{6}$/.test(f.code.trim())) return ElMessage.warning('请输入 6 位数字验证码');
+  if (f.password.length < 6 || f.password.length > 64) return ElMessage.warning('新密码长度需 6-64 位');
+  if (f.password !== f.password2) return ElMessage.warning('两次密码不一致');
+  resetSaving.value = true;
+  try {
+    await api.resetPassword({ email: mail, code: f.code.trim(), new_password: f.password });
+    ElMessage.success('密码已重置，请使用新密码登录');
+    resetDlg.value = false;
+    // 带回邮箱到登录表单
+    form.value.email = mail;
+    form.value.password = '';
+    mode.value = 'login';
+  } catch (e) {
+    ElMessage.error(e.message);
+  } finally {
+    resetSaving.value = false;
+  }
+}
+
+onBeforeUnmount(() => {
+  if (timer) clearInterval(timer);
+  if (resetTimer) clearInterval(resetTimer);
+});
 </script>
 
 <template>
@@ -154,9 +216,45 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
             <a @click="mode = mode === 'login' ? 'register' : 'login'">
               {{ mode === 'login' ? '立即注册' : '去登录' }}
             </a>
+            <template v-if="mode === 'login'">
+              <span class="switch-dot">·</span>
+              <a @click="openReset">忘记密码？</a>
+            </template>
           </div>
         </el-tab-pane>
       </el-tabs>
+
+      <!-- 忘记密码弹窗：邮箱验证码重置（公开流，不需要登录） -->
+      <el-dialog v-model="resetDlg" title="重置密码" width="400px" destroy-on-close
+        @closed="resetCountdown = 0">
+        <el-form label-position="top" @submit.prevent>
+          <el-form-item label="注册邮箱">
+            <el-input v-model="resetForm.email" placeholder="you@example.com" />
+          </el-form-item>
+          <el-form-item label="邮箱验证码">
+            <div class="code-row">
+              <el-input v-model="resetForm.code" maxlength="6" placeholder="6 位验证码" @keyup.enter="submitReset" />
+              <el-button
+                :disabled="resetCountdown > 0" :loading="resetSending" @click="sendResetCode"
+                style="width: 130px; flex-shrink: 0"
+              >
+                {{ resetCountdown > 0 ? `${resetCountdown}s 后重发` : '发送验证码' }}
+              </el-button>
+            </div>
+          </el-form-item>
+          <el-form-item label="新密码（6-64 位）">
+            <el-input v-model="resetForm.password" type="password" show-password placeholder="新密码" />
+          </el-form-item>
+          <el-form-item label="确认新密码">
+            <el-input v-model="resetForm.password2" type="password" show-password
+              placeholder="再输一次新密码" @keyup.enter="submitReset" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="resetDlg = false">取消</el-button>
+          <el-button type="primary" :loading="resetSaving" @click="submitReset">确认重置</el-button>
+        </template>
+      </el-dialog>
 
       <div class="auth-back"><router-link to="/">← 返回竞赛时间轴</router-link></div>
     </div>
@@ -175,6 +273,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
   .email-tip { margin: 12px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.7; }
   .auth-switch { margin-top: 14px; text-align: center; font-size: 13px; color: var(--text-2);
     a { color: var(--primary); cursor: pointer; }
+    .switch-dot { margin: 0 4px; color: var(--text-3); }
   }
   .auth-back { margin-top: 10px; text-align: center; font-size: 12.5px;
     a { color: #94a3b8; text-decoration: none; &:hover { color: var(--primary); } }

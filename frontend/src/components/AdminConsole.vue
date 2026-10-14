@@ -90,6 +90,22 @@ async function setRole(u, is_admin) {
   } catch (e) { ElMessage.error(e.message); }
 }
 
+// 一键提醒所有仍用初始密码的用户（后端对已有未读提醒的去重，返回新发送数）
+const remindLoading = ref(false);
+async function remindPassword() {
+  remindLoading.value = true;
+  try {
+    const r = await api.adminPasswordRemind();
+    if (r.total === 0) ElMessage.success('所有用户都已修改密码 🎉');
+    else if (r.sent === 0) ElMessage.info('待改密用户都已有未读提醒，无需重复发送');
+    else ElMessage.success(r.message);
+  } catch (e) {
+    ElMessage.error(e.message);
+  } finally {
+    remindLoading.value = false;
+  }
+}
+
 // ==================== Tab2 内容管理（帖子 / 评论） ====================
 const contentTab = ref('posts');
 const posts = reactive({ loading: false, q: '', list: [], total: 0, page: 1, size: 20 });
@@ -419,6 +435,9 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
             @keyup.enter="users.page = 1; loadUsers()" @clear="users.page = 1; loadUsers()">
             <template #append><el-button @click="users.page = 1; loadUsers()">搜索</el-button></template>
           </el-input>
+          <el-button type="warning" plain :loading="remindLoading" @click="remindPassword">
+            🔔 提醒未改密用户
+          </el-button>
           <span class="count">共 {{ users.total }} 位用户</span>
         </div>
         <el-table :data="users.list" v-loading="users.loading" stripe>
@@ -431,6 +450,12 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
           </el-table-column>
           <el-table-column prop="email" label="邮箱" min-width="180" show-overflow-tooltip />
           <el-table-column prop="create_time" label="注册时间" width="160" :formatter="fmtT" />
+          <el-table-column label="密码" width="100">
+            <template #default="{ row }">
+              <el-tag v-if="row.password_set === false" size="small" type="danger" effect="dark">初始密码</el-tag>
+              <el-tag v-else size="small" type="success" plain>已设置</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="90">
             <template #default="{ row }">
               <el-tag size="small" :type="STATUS_LABELS[row.status][1]">{{ STATUS_LABELS[row.status][0] }}</el-tag>

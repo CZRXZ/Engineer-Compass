@@ -12,6 +12,7 @@ import ExpenseGuide from './components/ExpenseGuide.vue';
 import PurchaseView from './components/purchase/PurchaseView.vue';
 import HonorView from './components/HonorView.vue';
 import MyView from './components/MyView.vue';
+import AccountSecurityView from './components/account/AccountSecurityView.vue';
 import ProfileView from './components/ProfileView.vue';
 import AuthView from './components/AuthView.vue';
 import AdminView from './components/AdminView.vue';
@@ -94,6 +95,14 @@ const router = createRouter({
       props: () => ({ ghost: true }), beforeEnter: ghostGuard,
     },
     { path: '/me', name: 'me', component: MyView },
+    // 账号安全（密码/邮箱/手机号/飞书/GitHub）：未登录跳登录后回来（组件内也有登录兜底）
+    {
+      path: '/account-security', name: 'account-security', component: AccountSecurityView,
+      beforeEnter: (to, _from, next) => {
+        if (!localStorage.getItem('ec_token')) return next(`/login?redirect=${encodeURIComponent(to.fullPath)}`);
+        next();
+      },
+    },
     // 用户公开主页（只读）：小组内点击成员头像/昵称进入
     { path: '/user/:id', name: 'user-profile', component: ProfileView },
     { path: '/login', name: 'login', component: AuthView },

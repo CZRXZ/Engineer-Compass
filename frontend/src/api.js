@@ -95,6 +95,10 @@ export const api = {
   me: () => req('/auth/me'),
   updateProfile: (card) => req('/auth/profile', { method: 'PUT', body: JSON.stringify(card) }),
   bindEmail: (card) => req('/auth/email', { method: 'PUT', body: JSON.stringify(card) }),
+  // 账号安全：改密（验证码 code 或旧密码二选一）/ 忘记密码（公开）/ 手机号绑定解绑
+  changePassword: (card) => req('/auth/change-password', { method: 'POST', body: JSON.stringify(card) }),
+  resetPassword: (card) => req('/auth/reset-password', { method: 'POST', body: JSON.stringify(card) }),
+  setPhone: (phone) => req('/auth/phone', { method: 'PUT', body: JSON.stringify({ phone }) }),
   feedback: (card) => req('/feedback', { method: 'POST', body: JSON.stringify(card) }),
   // 公开主页（只读）：基本资料 + 竞赛计划 + 学习日程 + 参加的小组
   userPublic: (id) => req(`/users/${id}/public`),
@@ -261,6 +265,8 @@ export const api = {
   adminPostDelete: (id) => req(`/admin/posts/${id}`, { method: 'DELETE' }),
   adminComments: (params) => req(`/admin/comments${qs(params)}`),
   adminCommentDelete: (id) => req(`/admin/comments/${id}`, { method: 'DELETE' }),
+  // 给所有仍用初始密码的用户补发个人公告（已有未读提醒的不重复发）
+  adminPasswordRemind: () => req('/admin/notices/password-remind', { method: 'POST' }),
   // 用户详情 + 角色管理
   adminUserDetail: (id) => req(`/admin/users/${id}/detail`),
   adminSetRole: (id, is_admin) => req(`/admin/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ is_admin: is_admin ? 1 : 0 }) }),
@@ -298,6 +304,14 @@ export const api = {
   feishuStatus: () => req('/feishu/oauth/status'),
   feishuAuth: () => req('/feishu/oauth/auth'),
   feishuUnbind: () => req('/feishu/oauth/unbind', { method: 'POST' }),
+  // GitHub OAuth 账号绑定（env 未配置时 status.configured=false，入口置灰）
+  githubStatus: () => req('/github/oauth/status'),
+  githubAuth: () => req('/github/oauth/auth'),
+  githubUnbind: () => req('/github/oauth/unbind', { method: 'POST' }),
+  // 个人公告/系统通知（初始密码提醒等；铃铛未读总数已含）
+  noticesPersonal: () => req('/notifications/personal'),
+  noticeRead: (id) => req(`/notifications/personal/${id}/read`, { method: 'POST' }),
+  noticesReadAll: () => req('/notifications/personal/read-all', { method: 'POST' }),
   // 飞书编辑页（P1）：业务记录 ↔ 飞书文档（daily_note / progress_log / share_post）
   // bizId 为空时后端自动创建业务记录（extra 传 note_date / team_id / title）
   feishuBizOpen: (bizType, bizId, extra) => req('/feishu/biz/open', { method: 'POST', body: JSON.stringify({ biz_type: bizType, biz_id: bizId ?? null, ...(extra || {}) }) }),

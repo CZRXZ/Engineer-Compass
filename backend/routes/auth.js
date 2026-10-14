@@ -10,12 +10,43 @@ const r = Router();
 const CODE_TTL = 10 * 60 * 1000; // 验证码 10 分钟有效
 const CODE_COOLDOWN = 60 * 1000; // 同一邮箱 60 秒内只能发一次
 
-// 邮箱 → 登录名：取邮箱前缀（去非法字符），冲突加数字后缀（email-login 自动注册与密码注册共用）
+// 初始密码：邮箱验证码注册的账号先存它，引导用户去账号安全页改密（env 可覆盖）
+const INITIAL_PASSWORD = process.env.INITIAL_PASSWORD || 'gkjsdh123';
+
+// 个人公告：初始密码提醒（发帖/补发都走这一处，文案不漂移）
+export function passwordInitNotice(userId) {
+  db.prepare(
+    `INSERT INTO personal_notice (user_id, type, title, content, link) VALUES (?, 'password_init', ?, ?, ?)`
+  ).run(
+    userId,
+    '【重要】请尽快修改初始密码',
+    `系统已为您的账号设置统一初始密码 ${INITIAL_PASSWORD}，为保障账号安全，请通过「邮箱验证码」修改为本人的密码。`,
+    '/account-security'
+  );
+}
+
+// 改密成功后：初始密码提醒自动已读（横幅/红点随之消失）
+function clearPasswordInitNotice(userId) {
+  db.prepare(
+    `UPDATE personal_notice SET is_read = 1, read_time = datetime('now','localtime')
+     WHERE user_id = ? AND type = 'password_init' AND is_read = 0`
+  ).run(userId);
+}
+
+// 顶层保留名：动态路由 /:username/:slug 不能与站内静态路由相撞
+const RESERVED_USERNAMES = new Set([
+  'share', 'me', 'user', 'users', 'admin', 'admin-console', 'login', 'api', 'schedule', 'study',
+  'team', 'honor', 'honors', 'purchase', 'expense', 'ghost-share', 'public', 'static',
+  'account-security', 'feishu.html', 'github',
+]);
+
+// 邮箱 → 登录名：取邮箱前缀（去非法字符），冲突或撞保留名加数字后缀（email-login 自动注册与密码注册共用）
 function genUsername(mail) {
   let base = (mail.split('@')[0] || 'user').replace(/[^A-Za-z0-9_]/g, '_').slice(0, 16);
   if (!/^[A-Za-z0-9_]{2,20}$/.test(base)) base = 'user';
-  let name = base;
-  for (let n = 1; db.prepare('SELECT id FROM user WHERE username = ?').get(name); n++) {
+  let name = base, n = 0;
+  while (db.prepare('SELECT id FROM user WHERE username = ?').get(name) || (n === 0 && RESERVED_USERNAMES.has(name))) {
+    n += 1;
     name = `${base}${n}`.slice(0, 20);
   }
   return name;
@@ -26,6 +57,7 @@ function genUsername(mail) {
 export const userCard = (u) => ({
   id: u.id, username: u.username, nickname: u.nickname, is_admin: !!u.is_admin, is_ghost: !!u.is_ghost,
   email: u.email || '', avatar: u.avatar || null,
+  password_set: u.password_set !== 0, phone: u.phone || '',
 });
 
 // POST /api/auth/send-code — 发送邮箱验证码（注册/登录共用；未注册邮箱登录时自动注册）
@@ -33,7 +65,13 @@ r.post('/send-code', async (req, res) => {
   const { email, purpose = 'login' } = req.body || {};
   const mail = String(email || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return res.status(400).json({ error: '邮箱格式不正确' });
-  if (!['login', 'register', 'bind'].includes(purpose)) return res.status(400).json({ error: 'purpose 仅支持 login/register/bind' });
+  if (!['login', 'register', 'bind', 'reset'].includes(purpose)) {
+    return res.status(400).json({ error: 'purpose 仅支持 login/register/bind/reset' });
+  }
+  // 找回/重置密码：邮箱不存在不发码，响应与成功同文案（防账号枚举；dev 模式也不回传 dev_code）
+  if (purpose === 'reset' && !db.prepare('SELECT id FROM user WHERE email = ?').get(mail)) {
+    return res.json({ message: '验证码已发送到邮箱，10 分钟内有效' });
+  }
 
   // 冷却：同邮箱 60s 内重复发送 → 429
   const last = db.prepare('SELECT created_at_ms FROM email_code WHERE email = ? ORDER BY id DESC LIMIT 1').get(mail);
@@ -77,11 +115,13 @@ r.post('/email-login', async (req, res) => {
   let migrated = 0;
   if (user?.status === 1) return res.status(403).json({ error: '账号已被封禁，无法登录' });
   if (!user) {
-    // 自动注册：用户名由邮箱前缀生成（冲突加数字后缀）
+    // 自动注册：用户名由邮箱前缀生成（冲突加数字后缀）；密码先存统一初始密码并标记待修改，
+    // 附个人公告引导去账号安全页改为本人密码（不再用随机串——随机密码等于永远登不上密码端）
     const name = genUsername(mail);
-    const rr = db.prepare('INSERT INTO user (username, password_hash, nickname, email) VALUES (?,?,?,?)')
-      .run(name, hashPassword(randomBytes(16).toString('hex')), mail.split('@')[0], mail);
-    user = { id: rr.lastInsertRowid, username: name, nickname: mail.split('@')[0], is_admin: 0, email: mail, avatar: null };
+    const rr = db.prepare('INSERT INTO user (username, password_hash, nickname, email, password_set) VALUES (?,?,?,?,0)')
+      .run(name, hashPassword(INITIAL_PASSWORD), mail.split('@')[0], mail);
+    user = { id: rr.lastInsertRowid, username: name, nickname: mail.split('@')[0], is_admin: 0, email: mail, avatar: null, password_set: 0 };
+    try { passwordInitNotice(user.id); } catch { /* 通知失败不挡登录 */ }
     // 把本机匿名数据接管到该账号：'local' 备赛计划 + 匿名学习日程 + 匿名日程笔记
     // 笔记按 (user_id, note_date) 唯一，账号已有同日笔记的 'local' 行保留（仍可通过列表查询看到）
     migrated += db.prepare("UPDATE user_schedule SET user_id = ? WHERE user_id = 'local'").run(user.id).changes;
@@ -120,9 +160,8 @@ r.post('/register', (req, res) => {
   db.prepare('INSERT INTO session (token, user_id) VALUES (?,?)').run(token, r2.lastInsertRowid);
   req.user = { id: r2.lastInsertRowid, username: name };
   logAudit(req, 'register', mail);
-  res.status(201).json({
-    token, user: { id: r2.lastInsertRowid, username: name, nickname: (nickname || '').trim() || name, is_admin: false, is_ghost: false, email: mail, avatar: null },
-  });
+  const nu = db.prepare('SELECT * FROM user WHERE id = ?').get(r2.lastInsertRowid);
+  res.status(201).json({ token, user: userCard(nu) });
 });
 
 // POST /api/auth/login — 登录（邮箱 + 密码；兼容存量 username + 密码）
@@ -138,8 +177,73 @@ r.post('/login', (req, res) => {
   const token = randomBytes(32).toString('hex');
   db.prepare('INSERT INTO session (token, user_id) VALUES (?,?)').run(token, u.id);
   req.user = { id: u.id, username: u.username };
-  logAudit(req, 'login', u.email || u.username, { via: 'password' });
+  logAudit(req, 'login', u.email || u.username, { via: 'password', initial_password: u.password_set === 0 });
   res.json({ token, user: userCard(u) });
+});
+
+// POST /api/auth/change-password — 登录态改密：邮箱验证码（purpose=reset，验的是本人绑定邮箱）
+// 或旧密码二选一；初始密码态禁止把新密码仍设成初始密码
+r.post('/change-password', authRequired, (req, res) => {
+  const me = db.prepare('SELECT * FROM user WHERE id = ?').get(req.user.id);
+  if (!me) return res.status(404).json({ error: '用户不存在' });
+  const { new_password, old_password, code } = req.body || {};
+  if (!new_password || String(new_password).length < 6) return res.status(400).json({ error: '新密码至少 6 位' });
+  if (String(new_password).length > 64) return res.status(400).json({ error: '新密码最多 64 位' });
+
+  if (code) {
+    if (!me.email) return res.status(400).json({ error: '账号未绑定邮箱，请改用旧密码方式' });
+    const row = db.prepare(
+      "SELECT id FROM email_code WHERE email = ? AND code = ? AND purpose = 'reset' AND expire_at > ? ORDER BY id DESC LIMIT 1"
+    ).get(me.email, String(code).trim(), Date.now());
+    if (!row) return res.status(400).json({ error: '验证码错误或已过期，请重新获取' });
+    db.prepare('DELETE FROM email_code WHERE email = ?').run(me.email);
+  } else {
+    if (!old_password || !verifyPassword(String(old_password), me.password_hash)) {
+      return res.status(400).json({ error: '旧密码不正确' });
+    }
+  }
+  if (me.password_set === 0 && String(new_password) === INITIAL_PASSWORD) {
+    return res.status(400).json({ error: '新密码不能与初始密码相同' });
+  }
+  db.prepare('UPDATE user SET password_hash = ?, password_set = 1 WHERE id = ?')
+    .run(hashPassword(String(new_password)), me.id);
+  clearPasswordInitNotice(me.id);
+  req.user = { id: me.id, username: me.username };
+  logAudit(req, 'password-change', me.email || me.username, { via: code ? 'email-code' : 'old-password' });
+  const u = db.prepare('SELECT * FROM user WHERE id = ?').get(me.id);
+  res.json({ message: '密码修改成功', user: userCard(u) });
+});
+
+// POST /api/auth/reset-password — 忘记密码（公开）：邮箱 + 验证码 + 新密码
+r.post('/reset-password', (req, res) => {
+  const { email, code, new_password } = req.body || {};
+  const mail = String(email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) return res.status(400).json({ error: '邮箱格式不正确' });
+  if (!new_password || String(new_password).length < 6) return res.status(400).json({ error: '新密码至少 6 位' });
+  const row = db.prepare(
+    "SELECT * FROM email_code WHERE email = ? AND code = ? AND purpose = 'reset' AND expire_at > ? ORDER BY id DESC LIMIT 1"
+  ).get(mail, String(code || '').trim(), Date.now());
+  const u = db.prepare('SELECT * FROM user WHERE email = ?').get(mail);
+  // 用户不存在与验证码错误同语义（防账号枚举）
+  if (!row || !u) return res.status(400).json({ error: '验证码错误或已过期，请重新获取' });
+  db.prepare('DELETE FROM email_code WHERE email = ?').run(mail);
+  db.prepare('UPDATE user SET password_hash = ?, password_set = 1 WHERE id = ?')
+    .run(hashPassword(String(new_password)), u.id);
+  clearPasswordInitNotice(u.id);
+  res.json({ message: '密码已重置，请使用新密码登录' });
+});
+
+// PUT /api/auth/phone — 绑定/更换/解绑手机号（本期仅号段校验；phone_verified 预留 SMS 通道）
+r.put('/phone', authRequired, (req, res) => {
+  const phone = String(req.body?.phone || '').trim();
+  if (phone && !/^1[3-9]\d{9}$/.test(phone)) return res.status(400).json({ error: '手机号格式不正确（11 位大陆手机号）' });
+  if (phone) {
+    const dup = db.prepare('SELECT id FROM user WHERE phone = ? AND id != ?').get(phone, req.user.id);
+    if (dup) return res.status(409).json({ error: '该手机号已被其他账号绑定' });
+  }
+  db.prepare('UPDATE user SET phone = ?, phone_verified = 0 WHERE id = ?').run(phone, req.user.id);
+  const u = db.prepare('SELECT * FROM user WHERE id = ?').get(req.user.id);
+  res.json({ message: phone ? '手机号已保存（暂未验证）' : '已解绑手机号', user: userCard(u) });
 });
 
 // POST /api/auth/logout — 登出（删除当前会话 + 审计）

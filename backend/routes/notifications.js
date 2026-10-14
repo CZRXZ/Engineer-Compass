@@ -43,7 +43,7 @@ r.get('/', authRequired, (req, res) => {
   });
 });
 
-// GET /api/notifications/unread-count — 红点数字（通知三组 + 私信未读）
+// GET /api/notifications/unread-count — 红点数字（通知三组 + 私信未读 + 个人公告）
 r.get('/unread-count', authRequired, (req, res) => {
   const me = uid(req);
   const countOf = (type) =>
@@ -52,7 +52,37 @@ r.get('/unread-count', authRequired, (req, res) => {
   const likes = countOf('like');
   const favs = countOf('fav');
   const dm = Number(db.prepare('SELECT COUNT(*) AS n FROM dm_message WHERE to_id = ? AND is_read = 0').get(me).n);
-  res.json({ total: comments + likes + favs + dm, comments, likes, favs, dm });
+  const notices = Number(
+    db.prepare('SELECT COUNT(*) AS n FROM personal_notice WHERE user_id = ? AND is_read = 0').get(me).n
+  );
+  res.json({ total: comments + likes + favs + dm + notices, comments, likes, favs, dm, notices });
+});
+
+// GET /api/notifications/personal — 个人公告/系统通知（最新 30 条）
+r.get('/personal', authRequired, (req, res) => {
+  const rows = db.prepare(
+    `SELECT id, type, title, content, link, is_read, create_time
+     FROM personal_notice WHERE user_id = ? ORDER BY id DESC LIMIT 30`
+  ).all(uid(req));
+  res.json({ rows });
+});
+
+// POST /api/notifications/personal/:id/read — 单条已读（只能标自己的）
+r.post('/personal/:id/read', authRequired, (req, res) => {
+  db.prepare(
+    `UPDATE personal_notice SET is_read = 1, read_time = datetime('now','localtime')
+     WHERE id = ? AND user_id = ? AND is_read = 0`
+  ).run(Number(req.params.id), uid(req));
+  res.json({ message: '已标记已读' });
+});
+
+// POST /api/notifications/personal/read-all — 全部已读
+r.post('/personal/read-all', authRequired, (req, res) => {
+  db.prepare(
+    `UPDATE personal_notice SET is_read = 1, read_time = datetime('now','localtime')
+     WHERE user_id = ? AND is_read = 0`
+  ).run(uid(req));
+  res.json({ message: '已全部标记已读' });
 });
 
 // POST /api/notifications/read — 批量标已读 { types: ['comment','like','fav'] }

@@ -15,7 +15,14 @@ r.use(adminRequired);
 const safeUser = (u) => u && ({
   id: u.id, username: u.username, nickname: u.nickname, is_admin: !!u.is_admin,
   email: u.email || '', avatar: u.avatar || null, status: u.status || 0, create_time: u.create_time || null,
+  password_set: u.password_set !== 0, phone: u.phone || '',
 });
+
+const PASSWORD_NOTICE = {
+  title: '【重要】请尽快修改初始密码',
+  content: `系统为您的账号设置了统一初始密码 ${process.env.INITIAL_PASSWORD || 'gkjsdh123'}，为保障账号安全，请通过「邮箱验证码」修改为本人的密码。`,
+  link: '/account-security',
+};
 
 // GET /api/admin/users?page&size&q — 用户列表（q 模糊搜昵称/邮箱/用户名）
 r.get('/users', (req, res) => {
@@ -27,7 +34,7 @@ r.get('/users', (req, res) => {
   const params = q ? [like, like, like] : [];
   const total = db.prepare(`SELECT COUNT(*) AS n FROM user ${where}`).get(...params).n;
   const list = db.prepare(
-    `SELECT id, username, nickname, is_admin, email, avatar, status, create_time
+    `SELECT id, username, nickname, is_admin, email, avatar, status, password_set, phone, create_time
      FROM user ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
   ).all(...params, size, (page - 1) * size).map(safeUser);
   res.json({ total, page, size, list });
@@ -72,6 +79,24 @@ r.get('/logs', (req, res) => {
 });
 
 // ---- 公告管理 ----
+// POST /api/admin/notices/password-remind — 给所有仍用初始密码的用户补发个人公告
+// （已有同 type 未读公告的不重复发），返回新发送数
+r.post('/notices/password-remind', (req, res) => {
+  const targets = db.prepare('SELECT id FROM user WHERE password_set = 0').all();
+  const exists = db.prepare(
+    "SELECT 1 FROM personal_notice WHERE user_id = ? AND type = 'password_init' AND is_read = 0"
+  );
+  const ins = db.prepare('INSERT INTO personal_notice (user_id, type, title, content, link) VALUES (?, \'password_init\', ?, ?, ?)');
+  let sent = 0;
+  for (const u of targets) {
+    if (exists.get(u.id)) continue;
+    ins.run(u.id, PASSWORD_NOTICE.title, PASSWORD_NOTICE.content, PASSWORD_NOTICE.link);
+    sent += 1;
+  }
+  logAudit(req, 'password-remind', `${sent}/${targets.length}`, { total: targets.length });
+  res.json({ sent, total: targets.length, message: `已向 ${sent} 位未改密用户补发提醒（共 ${targets.length} 位待修改）` });
+});
+
 r.get('/announcements', (req, res) => {
   res.json(db.prepare(
     `SELECT a.*, u.username AS admin_name FROM announcement a

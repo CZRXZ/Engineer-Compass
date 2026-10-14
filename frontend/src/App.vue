@@ -1,9 +1,12 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import ToolDock from './components/ToolDock.vue';
 import ImageViewer from './components/ImageViewer.vue';
 import auth from './auth.js';
 import { api } from './api.js';
+
+const router = useRouter();
 
 // 全局公告横幅：最新置顶公告（公开接口，无需登录；关闭仅本次会话记忆）
 const announce = ref(null);
@@ -11,6 +14,10 @@ const announceHidden = ref(false);
 onMounted(async () => {
   try { announce.value = await api.announcementLatest(); } catch { /* 横幅拉取失败不影响页面 */ }
 });
+
+// 初始密码个人提醒：password_set===0 时显示（软提示口径，不阻断使用）；✕ 仅本会话关闭
+const pwHidden = ref(false);
+function goAccountSecurity() { router.push('/account-security'); }
 
 // 幽灵模式（秘密通道「水手冰淇淋」）：is_ghost → html class，全站反色由 main.scss 驱动
 // is_ghost 持久化在 localStorage（ec_user），刷新后挂载即恢复；激活/退出经 patchUser 触发 watch
@@ -27,6 +34,14 @@ onMounted(() => applyGhostClass(auth.user?.is_ghost));
       <b class="ann-title">{{ announce.title }}</b>
       <span class="ann-content">{{ announce.content }}</span>
       <button class="ann-close" aria-label="关闭公告" @click="announceHidden = true">✕</button>
+    </div>
+    <!-- 初始密码个人提醒（仅本账号可见；改密后 password_set 翻 1 自动消失） -->
+    <div v-if="auth.token && auth.user?.password_set === false && !pwHidden" class="pw-bar">
+      <span class="ann-icon">⚠️</span>
+      <b class="ann-title">你的账号仍在使用初始密码</b>
+      <span class="ann-content">为了账号安全，请尽快通过邮箱验证码修改密码。</span>
+      <button class="pw-go" @click="goAccountSecurity">去设置</button>
+      <button class="ann-close" aria-label="关闭提醒" @click="pwHidden = true">✕</button>
     </div>
     <header class="app-header">
       <div class="brand">
@@ -84,6 +99,30 @@ onMounted(() => applyGhostClass(auth.user?.is_ghost));
     font-size: 14px; padding: 2px 6px; border-radius: 6px; flex-shrink: 0;
     &:hover { background: var(--card-bg)22; color: #fff; }
   }
+}
+
+/* 初始密码提醒条：琥珀底深字（区别于蓝色全局公告），非吸顶 */
+.pw-bar {
+  display: flex; align-items: center; gap: 8px;
+  background: #fef3c7; color: #92400e; font-size: 13px;
+  padding: 7px 16px 7px 20px;
+  border-bottom: 1px solid #fde68a;
+  .ann-title { flex-shrink: 0; }
+  .ann-content { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pw-go {
+    flex-shrink: 0; border: none; cursor: pointer; border-radius: 8px;
+    background: #d97706; color: #fff; font-size: 12px; padding: 4px 14px;
+    &:hover { background: #b45309; }
+  }
+  .ann-close {
+    border: none; background: transparent; color: #92400e; cursor: pointer;
+    font-size: 14px; padding: 2px 6px; border-radius: 6px; flex-shrink: 0;
+    &:hover { background: rgba(146, 64, 14, .12); }
+  }
+}
+html.ghost-mode .pw-bar {
+  background: #422006; color: #fcd34d; border-bottom-color: #78350f;
+  .ann-close { color: #fcd34d; }
 }
 
 .nav-me {

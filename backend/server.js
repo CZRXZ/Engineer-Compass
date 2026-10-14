@@ -24,6 +24,7 @@ import admin, { publicAnnounce } from './routes/admin.js';
 import resource, { publicR } from './routes/resource.js';
 import importPlan from './routes/importPlan.js';
 import feishu from './routes/feishu.js';
+import github from './routes/github.js';
 import expense from './routes/expense.js';
 import purchase from './routes/purchase.js';
 import honor, { adminR as adminHonor } from './routes/honor.js';
@@ -67,6 +68,7 @@ app.use('/api/resource', publicR); // 公开分享下载先声明（无鉴权，
 app.use('/api/resource', resource);
 app.use('/api/import', importPlan);
 app.use('/api/feishu', feishu);
+app.use('/api/github', github); // GitHub 账号 OAuth 绑定（账号安全页；未配 env 时仅 status 可用）
 app.use('/api/expense', expense);
 app.use('/api/purchase', purchase); // 物料采购申请（登录制：学生申请/负责人·老师按档案审批/发票上传）
 // 飞书互传工作台页面（独立静态工具页，不参与业务）

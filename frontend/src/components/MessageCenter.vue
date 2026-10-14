@@ -12,8 +12,9 @@ const props = defineProps({ open: Boolean });
 const emit = defineEmits(['close']);
 const router = useRouter();
 const tab = ref('dm');
-const counts = ref({ comments: 0, likes: 0, favs: 0, dm: 0 });
+const counts = ref({ comments: 0, likes: 0, favs: 0, dm: 0, notices: 0 });
 const notif = ref({ comments: [], likes: [], favs: [] });
+const notices = ref([]); // 个人公告/系统通知（初始密码提醒等）
 const friends = ref([]); // 好友列表（带 unread/last_msg/last_time）
 
 let fastTimer = null;
@@ -26,9 +27,12 @@ async function refreshUnread() {
 
 async function loadAll() {
   try {
-    const [n, f] = await Promise.all([api.notifications(), api.friendList()]);
+    const [n, f, p] = await Promise.all([
+      api.notifications(), api.friendList(), api.noticesPersonal(),
+    ]);
     notif.value = n;
     friends.value = f;
+    notices.value = p.rows || [];
   } catch { /* 静默 */ }
 }
 
@@ -41,6 +45,19 @@ async function goNotif(n) {
   }
   emit('close'); // 跳转前关闭面板
   router.push(`/share/${n.post.id}`);
+}
+
+// 系统通知（个人公告）点击：标已读 + 跳 link（如 /account-security）；无 link 只标已读
+function goNotice(n) {
+  if (!n.is_read) {
+    n.is_read = 1;
+    api.noticeRead(n.id).catch(() => {});
+    refreshUnread();
+  }
+  if (n.link) {
+    emit('close'); // 跳转前关闭面板
+    router.push(n.link);
+  }
 }
 
 // 私信跳转：跳到「我的」- 好友 tab，自动打开与对方的私聊弹窗
@@ -57,8 +74,12 @@ function goProfile(id) {
 }
 
 async function readAll() {
-  await api.notificationsRead(['comment', 'like', 'fav']).catch(() => {});
+  await Promise.all([
+    api.notificationsRead(['comment', 'like', 'fav']),
+    api.noticesReadAll(),
+  ].map((p) => p.catch(() => {})));
   for (const k of ['comments', 'likes', 'favs']) notif.value[k].forEach((n) => (n.is_read = 1));
+  notices.value.forEach((n) => (n.is_read = 1));
   refreshUnread();
   ElMessage.success('已全部标记为已读');
 }
@@ -79,6 +100,7 @@ function fmtTime(t) {
 const dmUnread = () => (counts.value.comments || 0) + (counts.value.dm || 0);
 const likeUnread = () => counts.value.likes || 0;
 const favUnread = () => counts.value.favs || 0;
+const noticeUnread = () => counts.value.notices || 0;
 
 onBeforeUnmount(() => {
   clearInterval(fastTimer);
@@ -109,6 +131,30 @@ watch(() => props.open, (v) => {
       </div>
 
       <el-tabs v-model="tab" class="m-tabs">
+        <!-- Tab0 系统通知（个人公告：初始密码提醒等，点击跳 link 并标已读） -->
+        <el-tab-pane name="notice">
+          <template #label>
+            <span class="t-label">系统通知<em v-if="noticeUnread()" class="t-num">{{ noticeUnread() }}</em></span>
+          </template>
+          <div class="m-scroll">
+            <div
+              v-for="n in notices" :key="n.id" class="n-item"
+              :class="{ unread: !n.is_read, clickable: !!n.link }" @click="goNotice(n)"
+            >
+              <div class="av">📢</div>
+              <div class="n-body">
+                <div class="n-line1">
+                  <span class="n-who">{{ n.title || '系统通知' }}</span>
+                  <span class="n-time">{{ fmtTime(n.create_time) }}</span>
+                </div>
+                <div class="n-txt">{{ n.content }}</div>
+                <div v-if="n.link" class="n-post">点击查看 →</div>
+              </div>
+            </div>
+            <el-empty v-if="!notices.length" description="暂无系统通知" :image-size="50" />
+          </div>
+        </el-tab-pane>
+
         <!-- Tab1 私信评论 -->
         <el-tab-pane name="dm">
           <template #label>

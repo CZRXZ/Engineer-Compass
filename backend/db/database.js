@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { scryptSync, randomBytes } from 'node:crypto';
+import { uniquePostSlug } from '../lib/slug.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || join(__dirname, '..', 'data', 'compass.db');
@@ -37,6 +39,55 @@ migCol('user_resource', 'feishu_token', 'ALTER TABLE user_resource ADD COLUMN fe
 migCol('team_file', 'resource_ref', 'ALTER TABLE team_file ADD COLUMN resource_ref INTEGER'); // 引用型文件：指向 user_resource.id（data 为空）
 migCol('share_post', 'gitee_repo', "ALTER TABLE share_post ADD COLUMN gitee_repo TEXT DEFAULT ''"); // Gitee 仓库 owner/repo（空=非仓库帖）
 migCol('share_post', 'gitee_ref', "ALTER TABLE share_post ADD COLUMN gitee_ref TEXT DEFAULT ''");   // Gitee 分支/标签/sha
+migCol('user', 'password_set', 'ALTER TABLE user ADD COLUMN password_set INTEGER NOT NULL DEFAULT 1'); // 0=初始密码待修改
+migCol('user', 'phone', "ALTER TABLE user ADD COLUMN phone TEXT DEFAULT ''");                          // 手机号（部分唯一索引）
+migCol('user', 'phone_verified', 'ALTER TABLE user ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0'); // 预留：SMS 验证
+migCol('share_post', 'slug', "ALTER TABLE share_post ADD COLUMN slug TEXT DEFAULT ''");                // GitHub 风路径名
+migCol('share_post', 'is_public', 'ALTER TABLE share_post ADD COLUMN is_public INTEGER NOT NULL DEFAULT 1'); // 1=开源
+
+// ---- user_version 闸门：只对「升级前的老库」执行一次的存量数据回填 ----
+// 新库（schema 直接建成新结构、零行）同样过一遍但 0 行受影响，随即落版本号。
+const INITIAL_PASSWORD = process.env.INITIAL_PASSWORD || 'gkjsdh123';
+let userVer = Number(db.prepare('PRAGMA user_version').get().user_version || 0);
+if (userVer < 1) {
+  // ① 全部存量用户：无法从 scrypt 哈希区分「随机密码/真实密码」（已与用户确认口径），
+  //    统一重置为初始密码并标记待修改；逐人独立 salt（与 middleware.hashPassword 同格式 salt$hash）。
+  const users = db.prepare('SELECT id FROM user').all();
+  const updPw = db.prepare('UPDATE user SET password_hash = ?, password_set = 0 WHERE id = ?');
+  const insNotice = db.prepare(
+    `INSERT INTO personal_notice (user_id, type, title, content, link)
+     VALUES (?, 'password_init', ?, ?, ?)`
+  );
+  for (const u of users) {
+    const salt = randomBytes(16).toString('hex');
+    updPw.run(`${salt}$${scryptSync(INITIAL_PASSWORD, salt, 64).toString('hex')}`, u.id);
+    insNotice.run(
+      u.id,
+      '【重要】请尽快修改初始密码',
+      `系统已为您的账号设置统一初始密码 ${INITIAL_PASSWORD}，为保障账号安全，请通过「邮箱验证码」修改为本人的密码。`,
+      '/account-security'
+    );
+  }
+  // ② 存量帖子 slug 回填（同用户内由标题去重；新发帖由路由保证非空）
+  for (const p of db.prepare('SELECT id, user_id, title FROM share_post ORDER BY user_id, id').all()) {
+    if (p.slug) continue;
+    db.prepare('UPDATE share_post SET slug = ? WHERE id = ?')
+      .run(uniquePostSlug(db, p.user_id, p.title, p.id), p.id);
+  }
+  db.exec('PRAGMA user_version = 1;');
+  userVer = 1;
+  if (users.length) console.log(`🔐 存量账号初始密码回填完成：${users.length} 位用户已置为初始密码并收到个人公告`);
+}
+
+// 兜底：任何漏网的空 slug（正常不会有——发帖即生成；迁移后从备份恢复等边缘情况自愈）
+for (const p of db.prepare("SELECT id, user_id, title FROM share_post WHERE slug = '' ORDER BY id").all()) {
+  db.prepare('UPDATE share_post SET slug = ? WHERE id = ?')
+    .run(uniquePostSlug(db, p.user_id, p.title, p.id), p.id);
+}
+
+// 唯一索引必须在 slug 回填之后建：老库所有行初始 slug='' 会直接撞唯一约束
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_phone ON user(phone) WHERE phone != ''");
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_share_post_owner_slug ON share_post(user_id, slug)');
 
 // 飞书绑定表 v2：站级单绑定(id=1) → 每用户绑定(user_id 主键，一飞书账号可绑多个网页账号)
 // 老库旧表作废重建（旧数据仅一个测试绑定，需重新授权一次）；新库 schema.sql 已建新表，此处跳过

@@ -99,8 +99,12 @@ CREATE TABLE IF NOT EXISTS user (
   avatar        TEXT,                          -- 头像（128px JPEG 压缩 dataURL，~10-20KB）
   is_admin      INTEGER DEFAULT 0,             -- 系统管理员（可进管理端）
   is_ghost      INTEGER DEFAULT 0,             -- 幽灵模式（秘密通道「水手冰淇淋」激活，仅幽灵可见内容）
+  password_set  INTEGER NOT NULL DEFAULT 1,    -- 1=已设自有密码 0=初始密码 gkjsdh123 待修改（邮箱验证码注册为 0）
+  phone         TEXT DEFAULT '',               -- 手机号（本期仅号段校验、未接 SMS，phone_verified 恒 0 预留）
+  phone_verified INTEGER NOT NULL DEFAULT 0,
   create_time   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- idx_user_phone 部分唯一索引在 database.js 迁移链创建（老库 phone 列后补，建索引须在 migCol 后）
 
 -- 表19 email_code 邮箱验证码（登录/注册/绑定邮箱用，一次性、10分钟过期）
 -- （user.email 唯一索引在 database.js 迁移链后创建，兼容老库先 ALTER 再加列的启动顺序）
@@ -294,10 +298,13 @@ CREATE TABLE IF NOT EXISTS share_post (
   content     TEXT DEFAULT '',               -- 富文本 HTML
   attachments TEXT DEFAULT '[]',             -- [{name,size,mime,data}] base64
   is_ghost    INTEGER DEFAULT 0,             -- 1=幽灵帖（仅幽灵用户可见，普通用户完全隔离）
+  slug        TEXT DEFAULT '',               -- GitHub 风项目路径名（同用户唯一，发帖时由标题生成，不可改）
+  is_public   INTEGER NOT NULL DEFAULT 1,    -- 1=开源（任何人凭链接可见） 0=私密（仅作者；管理员后台可见）
   create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
   update_time DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_share_post_user ON share_post(user_id);
+-- (user_id,slug) 唯一索引在 database.js 迁移链创建（slug 列对老库是后补的）
 
 CREATE TABLE IF NOT EXISTS share_tag (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -673,3 +680,29 @@ CREATE TABLE IF NOT EXISTS purchase_approval_log (
   create_time   TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_log_request ON purchase_approval_log(request_id);
+
+-- 表51 personal_notice 个人公告/系统通知（定向推送；type=password_init 初始密码提醒，link 可点跳账号安全页）
+CREATE TABLE IF NOT EXISTS personal_notice (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL,                  -- password_init | system（预留）
+  title       TEXT NOT NULL,
+  content     TEXT DEFAULT '',
+  link        TEXT DEFAULT '',               -- 点击跳转的站内路径，如 /account-security
+  is_read     INTEGER NOT NULL DEFAULT 0,
+  create_time TEXT DEFAULT (datetime('now','localtime')),
+  read_time   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_personal_notice_user ON personal_notice(user_id, is_read);
+
+-- 表52 github_bind GitHub 账号 OAuth 绑定（仿 feishu_bind；token 仅展示身份用，失效解绑重绑即可）
+CREATE TABLE IF NOT EXISTS github_bind (
+  user_id     INTEGER PRIMARY KEY REFERENCES user(id) ON DELETE CASCADE,
+  github_id   INTEGER NOT NULL UNIQUE,        -- GitHub 数字 id（同一 GitHub 账号不能绑多个本站账号）
+  login       TEXT NOT NULL,                  -- GitHub 用户名（路由展示）
+  avatar_url  TEXT DEFAULT '',
+  profile_url TEXT DEFAULT '',
+  token_prefix TEXT DEFAULT '',              -- access_token 前 8 位（排障用，只存这点）
+  create_time TEXT DEFAULT (datetime('now','localtime')),
+  update_time TEXT DEFAULT (datetime('now','localtime'))
+);
