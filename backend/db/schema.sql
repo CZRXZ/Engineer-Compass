@@ -706,3 +706,119 @@ CREATE TABLE IF NOT EXISTS github_bind (
   create_time TEXT DEFAULT (datetime('now','localtime')),
   update_time TEXT DEFAULT (datetime('now','localtime'))
 );
+
+-- ==================== 资源预约模块（/booking，挂载 /api/booking；与小组域 team_device 设备预约互不相关） ====================
+
+-- 表53 预约项目档案（只关不删；default_approve_mode 仅作新增资源表单的预填，审批以资源级开关为准）
+CREATE TABLE IF NOT EXISTS booking_project (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name                 TEXT NOT NULL UNIQUE,
+  description          TEXT DEFAULT '',
+  default_approve_mode TEXT NOT NULL DEFAULT 'approval', -- approval 需审批 / first_come 先到先得
+  status               TEXT NOT NULL DEFAULT 'open',     -- open / closed
+  created_by           INTEGER REFERENCES user(id) ON DELETE SET NULL,
+  create_time          TEXT DEFAULT (datetime('now','localtime')),
+  close_time           TEXT,
+  update_time          TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_bk_project_status ON booking_project(status);
+
+-- 表54 项目内可用资源（空间 space：独占+容量；物品 item：数量库存池）
+CREATE TABLE IF NOT EXISTS booking_resource (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id   INTEGER NOT NULL REFERENCES booking_project(id) ON DELETE RESTRICT,
+  kind         TEXT NOT NULL,                  -- item 物品资源 / space 空间资源（老库五分类值由 user_version=2 迁移）
+  is_space     INTEGER NOT NULL DEFAULT 0,     -- 1=空间(space) 0=物品(item)
+  name         TEXT NOT NULL,
+  spec         TEXT DEFAULT '',                -- 规格型号（物品）
+  location     TEXT DEFAULT '',                -- 楼栋/房间号/存放位置
+  capacity     INTEGER,                        -- 空间：可容纳人数；物品恒 NULL
+  quantity     INTEGER NOT NULL DEFAULT 1,     -- 物品：库存总数；空间恒 1
+  unit         TEXT DEFAULT '',                -- 物品单位：件/台/套…
+  params       TEXT NOT NULL DEFAULT '{}',     -- JSON：空间 {"equipment":["投影仪",…]}，物品自由扩展
+  approve_mode TEXT NOT NULL DEFAULT 'approval', -- 资源级审批开关：approval / first_come
+  status       TEXT NOT NULL DEFAULT 'active', -- active / archived（被预约引用后只能归档）
+  created_by   INTEGER REFERENCES user(id) ON DELETE SET NULL,
+  create_time  TEXT DEFAULT (datetime('now','localtime')),
+  update_time  TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_bk_resource_pstatus ON booking_resource(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_bk_resource_pkind ON booking_resource(project_id, kind);
+
+-- 表55 固定组队（预约模块内自建，独立于项目小组）
+CREATE TABLE IF NOT EXISTS booking_team (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id  INTEGER NOT NULL REFERENCES booking_project(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  owner_id    INTEGER REFERENCES user(id) ON DELETE SET NULL,
+  owner_name  TEXT NOT NULL DEFAULT '',
+  create_time TEXT DEFAULT (datetime('now','localtime')),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_bk_team_project ON booking_team(project_id);
+
+-- 表56 固定组队成员（组队后增删改名不影响已下预约的参与人快照）
+CREATE TABLE IF NOT EXISTS booking_team_member (
+  team_id   INTEGER NOT NULL REFERENCES booking_team(id) ON DELETE CASCADE,
+  user_id   INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  user_name TEXT NOT NULL,
+  ord       INTEGER DEFAULT 0,
+  PRIMARY KEY (team_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bk_team_member_user ON booking_team_member(user_id);
+
+-- 表57 预约主表（时间为北京时间朴素串 'YYYY-MM-DD HH:MM'，定宽可直接半开区间比较；勿走 toLocal 补 Z）
+-- 状态机：first_come 资源创建即 confirmed（冲突 409 不建单）；approval 资源 pending→confirmed/rejected；
+--   pending 即占位（与 confirmed 一起参与冲突检测），驳回/取消释放；不提供编辑，改约=取消重约。
+CREATE TABLE IF NOT EXISTS booking (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id     INTEGER NOT NULL REFERENCES booking_project(id) ON DELETE RESTRICT,
+  resource_id    INTEGER NOT NULL REFERENCES booking_resource(id) ON DELETE RESTRICT,
+  start_time     TEXT NOT NULL,
+  end_time       TEXT NOT NULL,
+  qty            INTEGER NOT NULL DEFAULT 1,   -- 物品本次借用数量；空间恒 1
+  headcount      INTEGER NOT NULL DEFAULT 1,   -- 参与总人数（含预约者；空间须 ≤ capacity）
+  purpose        TEXT DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'pending', -- pending / confirmed / rejected / canceled
+  source         TEXT NOT NULL DEFAULT 'solo',    -- solo / team / custom
+  team_id        INTEGER REFERENCES booking_team(id) ON DELETE SET NULL,
+  booker_id      INTEGER REFERENCES user(id) ON DELETE CASCADE,
+  booker_name    TEXT NOT NULL,
+  approver_id    INTEGER,
+  approver_name  TEXT DEFAULT '',
+  approve_time   TEXT,
+  reject_reason  TEXT DEFAULT '',
+  cancel_by_id   INTEGER,
+  cancel_by_name TEXT DEFAULT '',
+  cancel_time    TEXT,
+  create_time    TEXT DEFAULT (datetime('now','localtime')),
+  update_time    TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_bk_booking_resource ON booking(resource_id, status, start_time);
+CREATE INDEX IF NOT EXISTS idx_bk_booking_project ON booking(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_bk_booking_booker ON booking(booker_id);
+
+-- 表58 预约参与人快照（下单瞬间固化；甘特头像组与通知 fan-out 用）
+CREATE TABLE IF NOT EXISTS booking_participant (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  booking_id INTEGER NOT NULL REFERENCES booking(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+  user_name  TEXT NOT NULL,
+  is_booker  INTEGER NOT NULL DEFAULT 0,
+  ord        INTEGER DEFAULT 0,
+  UNIQUE (booking_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bk_participant_user ON booking_participant(user_id);
+
+-- 表59 预约轨迹（created/approved/rejected/canceled 各一条；详情弹窗时间线渲染）
+CREATE TABLE IF NOT EXISTS booking_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  booking_id  INTEGER NOT NULL REFERENCES booking(id) ON DELETE CASCADE,
+  action      TEXT NOT NULL,              -- created / approved / rejected / canceled
+  actor_id    INTEGER,
+  actor_name  TEXT NOT NULL,
+  comment     TEXT DEFAULT '',
+  create_time TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_bk_log_booking ON booking_log(booking_id);

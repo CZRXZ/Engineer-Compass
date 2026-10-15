@@ -14,51 +14,95 @@ const CONF = {
     icon: '🪶', title: '飞书账号', msgType: 'feishu-bound',
     tip: '绑定后，日程笔记 / 进度汇报 / 分享帖可直接在飞书文档里编辑，资源分享可从飞书引出链接。',
     nameField: 'user_name', nameFallback: '飞书用户', configHint: '站点尚未配置飞书应用（FEISHU_APP_ID / SECRET）',
+    // 飞书回调页 targetOrigin='*'（历史行为不动），这里不强制来源
+    checkOrigin: false, errorType: '',
     status: () => api.feishuStatus(), auth: () => api.feishuAuth(), unbind: () => api.feishuUnbind(),
   },
   github: {
     icon: '🐙', title: 'GitHub 账号', msgType: 'github-bound',
-    tip: '绑定 GitHub 账号，用于项目作者身份展示（本期仅做账号关联）。',
+    tip: '绑定后可用 GitHub 一键登录：已绑定直接登录；未绑定时按 GitHub 已验证邮箱自动匹配本站账号，匹配不到会自动创建新账号。',
     nameField: 'login', nameFallback: 'GitHub 用户', configHint: '站点尚未配置 GitHub OAuth（GITHUB_CLIENT_ID / SECRET）',
+    // GitHub 回调页同源（dev 走 Vite 代理）：必须校验来源，拒绝外站 postMessage
+    checkOrigin: true, errorType: 'github-oauth-error',
     status: () => api.githubStatus(), auth: () => api.githubAuth(), unbind: () => api.githubUnbind(),
   },
 }[props.platform] || {};
 
 const st = ref({ configured: false, bound: false, loading: false });
+const loadFailed = ref(false); // status 拉取失败：显示「重试」，不伪装成「未配置」
+let oauthWin = null;
+let closeTimer = null;
+
+function stopWinWatch() {
+  if (closeTimer) { clearInterval(closeTimer); closeTimer = null; }
+  oauthWin = null;
+}
+
 const listener = (e) => {
-  if (e.data?.type === CONF.msgType) {
+  // GitHub 只收同源消息；飞书维持历史口径不校验
+  if (CONF.checkOrigin && e.origin !== location.origin) return;
+  const d = e.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.type === CONF.msgType) {
+    stopWinWatch();
+    st.value.loading = false;
     ElMessage.success(`✅ ${CONF.title}绑定成功`);
     load();
+  } else if (CONF.errorType && d.type === CONF.errorType) {
+    // 回调失败也要复位 loading，否则按钮永久转圈
+    stopWinWatch();
+    st.value.loading = false;
+    ElMessage.error(d.message || `${CONF.title}绑定失败，请重试`);
   }
 };
 async function load() {
-  try { st.value = { ...(await CONF.status()), loading: false }; }
-  catch { st.value = { configured: false, bound: false, loading: false }; }
+  try {
+    st.value = { ...(await CONF.status()), loading: false };
+    loadFailed.value = false;
+  } catch {
+    loadFailed.value = true;
+    st.value.loading = false;
+  }
 }
 async function bind() {
   st.value.loading = true;
   try {
     const { url } = await CONF.auth();
     if (!url) throw new Error('授权地址获取失败');
-    window.open(url, '_blank', 'width=720,height=640'); // 不用 noopener：回调页要 postMessage
+    oauthWin = window.open(url, '_blank', 'width=720,height=640'); // 不用 noopener：回调页要 postMessage
+    if (!oauthWin) {
+      st.value.loading = false;
+      ElMessage.warning('浏览器拦截了弹窗，请允许本站弹出窗口后重试');
+      return;
+    }
+    // 用户直接关窗 = 放弃绑定：轮询复位 loading
+    closeTimer = setInterval(() => {
+      if (oauthWin?.closed) { stopWinWatch(); st.value.loading = false; }
+    }, 500);
   } catch (e) {
     ElMessage.error(e.message);
     st.value.loading = false;
   }
 }
 async function unbind() {
-  await ElMessageBox.confirm(`解绑后本账号将解除与${CONF.title}的关联，确定解绑？`, `解绑${CONF.title}`, { type: 'warning' });
+  // 取消确认是正常操作：单独吞掉，不留 loading 也不产生未处理拒绝
+  try {
+    await ElMessageBox.confirm(`解绑后本账号将解除与${CONF.title}的关联，确定解绑？`, `解绑${CONF.title}`, { type: 'warning' });
+  } catch {
+    return;
+  }
   st.value.loading = true;
   try {
     await CONF.unbind();
     ElMessage.success('已解绑');
-  } finally {
+    await load();
+  } catch (e) {
     st.value.loading = false;
-    load();
+    ElMessage.error(e.message || '解绑失败，请稍后重试');
   }
 }
 onMounted(() => { window.addEventListener('message', listener); load(); });
-onBeforeUnmount(() => window.removeEventListener('message', listener));
+onBeforeUnmount(() => { window.removeEventListener('message', listener); stopWinWatch(); });
 </script>
 
 <template>
@@ -85,7 +129,8 @@ onBeforeUnmount(() => window.removeEventListener('message', listener));
         </div>
       </div>
       <div class="ac-actions">
-        <template v-if="st.bound">
+        <el-button v-if="loadFailed" plain @click="load">↻ 重试</el-button>
+        <template v-else-if="st.bound">
           <el-button type="success" plain @click="load">🔄 刷新</el-button>
           <el-button type="danger" plain :loading="st.loading" @click="unbind">解绑</el-button>
         </template>

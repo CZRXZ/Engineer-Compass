@@ -155,3 +155,6 @@ backups/
 
 # 用户上传的资源文件（元数据在 DB，文件落盘不入库）
 backend/uploads/
+
+# 探针/冒烟临时产物（C 盘满时 TEMP 重定向于此）
+.tmp/

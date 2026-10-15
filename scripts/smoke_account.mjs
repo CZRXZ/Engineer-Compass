@@ -116,7 +116,7 @@ try {
 
   // ---------- 3. 迁移回填断言（直连临时库只读） ----------
   const db = new DatabaseSync(dbPath, { readOnly: true });
-  ok('迁移闸门 user_version=1', Number(db.prepare('PRAGMA user_version').get().user_version) === 1);
+  ok('迁移闸门 user_version=2（v1 密码/slug + v2 资源两类）', Number(db.prepare('PRAGMA user_version').get().user_version) === 2);
   const olds = db.prepare('SELECT id,username,email,password_hash,password_set FROM user ORDER BY id').all();
   ok('老用户 3 人全部 password_set=0', olds.length === 3 && olds.every((u) => u.password_set === 0), olds.map((u) => u.password_set));
   ok('密码哈希已被重置（非旧 junk$00，salt$64hex）', olds.every((u) =>
@@ -245,6 +245,8 @@ try {
   ok('手机号解绑成功', ph.user.phone === '');
 
   // ---------- 15. GitHub 未配置 + 飞书无影响 ----------
+  const gcfg = await jsonReq('/github/oauth/configured');
+  ok('匿名 configured 公开可取且=false', gcfg.res.ok && gcfg.data.configured === false, gcfg.data);
   g = await expect('/github/oauth/status', 401);
   ok('GitHub status 需登录 401', g.ok);
   const gh = await api('/github/oauth/status', { token: tD });

@@ -1,6 +1,6 @@
 <script setup>
 // 登录 / 注册：邮箱验证码（推荐，未注册自动注册）+ 邮箱密码（登录名由邮箱自动生成）
-import { ref, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api } from '../api.js';
@@ -155,9 +155,69 @@ async function submitReset() {
   }
 }
 
+// ---- GitHub 一键登录（弹窗 OAuth；回调页 postMessage 同源消息；未配置则不显示入口） ----
+const githubEnabled = ref(false);
+const ghLoading = ref(false);
+let ghWin = null;
+let ghCloseTimer = null;
+
+function cleanupGithub() {
+  if (ghCloseTimer) { clearInterval(ghCloseTimer); ghCloseTimer = null; }
+  ghWin = null;
+}
+
+async function githubLoginClick() {
+  ghLoading.value = true;
+  try {
+    const { url } = await api.githubLogin();
+    ghWin = window.open(url, 'github-oauth', 'width=720,height=640');
+    if (!ghWin) {
+      ghLoading.value = false;
+      return ElMessage.warning('浏览器拦截了弹窗，请允许本站弹出窗口后重试');
+    }
+    // 用户直接关窗 = 放弃登录：轮询复位 loading，避免按钮永久转圈
+    ghCloseTimer = setInterval(() => {
+      if (ghWin?.closed) { cleanupGithub(); ghLoading.value = false; }
+    }, 500);
+  } catch (e) {
+    ghLoading.value = false;
+    ElMessage.error(e.message);
+  }
+}
+
+function onGithubMessage(ev) {
+  // 只接收同源消息（回调页经 Vite 代理/同源部署，origin 与本站一致）
+  if (ev.origin !== location.origin) return;
+  const d = ev.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.type === 'github-login') {
+    cleanupGithub();
+    ghLoading.value = false;
+    setAuth(d.token, d.user);
+    ElMessage.success(`欢迎，${d.user.nickname}`);
+    afterLogin();
+  } else if (d.type === 'github-oauth-error') {
+    cleanupGithub();
+    ghLoading.value = false;
+    ElMessage.error(d.message || 'GitHub 登录失败，请重试');
+  }
+}
+
+onMounted(async () => {
+  window.addEventListener('message', onGithubMessage);
+  try {
+    const cfg = await api.githubConfigured();
+    githubEnabled.value = cfg.configured === true;
+  } catch {
+    githubEnabled.value = false; // 探测失败：不显示入口，不挡住常规登录
+  }
+});
+
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer);
   if (resetTimer) clearInterval(resetTimer);
+  cleanupGithub();
+  window.removeEventListener('message', onGithubMessage);
 });
 </script>
 
@@ -224,6 +284,15 @@ onBeforeUnmount(() => {
         </el-tab-pane>
       </el-tabs>
 
+      <!-- GitHub 一键登录（服务端配置 GITHUB_CLIENT_ID 后显示） -->
+      <template v-if="githubEnabled">
+        <div class="oauth-divider"><span>或</span></div>
+        <el-button size="large" class="github-btn" :loading="ghLoading" @click="githubLoginClick">
+          🐙 使用 GitHub 登录
+        </el-button>
+        <p class="email-tip">首次登录按 GitHub 已验证邮箱匹配账号；匹配不到会自动创建新账号</p>
+      </template>
+
       <!-- 忘记密码弹窗：邮箱验证码重置（公开流，不需要登录） -->
       <el-dialog v-model="resetDlg" title="重置密码" width="400px" destroy-on-close
         @closed="resetCountdown = 0">
@@ -271,6 +340,14 @@ onBeforeUnmount(() => {
   .auth-btn { width: 100%; }
   .code-row { display: flex; gap: 8px; width: 100%; }
   .email-tip { margin: 12px 0 0; font-size: 12px; color: #94a3b8; line-height: 1.7; }
+  .oauth-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 14px;
+    color: #94a3b8; font-size: 12px;
+    &::before, &::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  }
+  .github-btn {
+    width: 100%; background: #24292f; border-color: #24292f; color: #fff; font-weight: 600;
+    &:hover, &:focus { background: #2f363d; border-color: #2f363d; color: #fff; }
+  }
   .auth-switch { margin-top: 14px; text-align: center; font-size: 13px; color: var(--text-2);
     a { color: var(--primary); cursor: pointer; }
     .switch-dot { margin: 0 4px; color: var(--text-3); }

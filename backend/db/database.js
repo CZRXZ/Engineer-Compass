@@ -79,6 +79,23 @@ if (userVer < 1) {
   if (users.length) console.log(`🔐 存量账号初始密码回填完成：${users.length} 位用户已置为初始密码并收到个人公告`);
 }
 
+if (userVer < 2) {
+  // 资源预约：资源五分类（道具/器材/器械/实验室/教室）简化为两类 item/space。
+  // 老库可能早于预约模块，先探测表存在；is_space 已独立保存，直接按老 kind 映射。
+  const hasBookingResource = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'booking_resource'")
+    .get();
+  if (hasBookingResource) {
+    const r1 = db.prepare("UPDATE booking_resource SET kind = 'space' WHERE kind IN ('lab', 'classroom')").run();
+    const r2 = db.prepare("UPDATE booking_resource SET kind = 'item' WHERE kind IN ('prop', 'equipment', 'instrument')").run();
+    if (r1.changes + r2.changes) {
+      console.log(`🏢 资源分类迁移完成：${r1.changes} 条空间资源、${r2.changes} 条物品资源已归入新两类`);
+    }
+  }
+  db.exec('PRAGMA user_version = 2;');
+  userVer = 2;
+}
+
 // 兜底：任何漏网的空 slug（正常不会有——发帖即生成；迁移后从备份恢复等边缘情况自愈）
 for (const p of db.prepare("SELECT id, user_id, title FROM share_post WHERE slug = '' ORDER BY id").all()) {
   db.prepare('UPDATE share_post SET slug = ? WHERE id = ?')

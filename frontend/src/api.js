@@ -16,6 +16,8 @@ async function req(path, opts = {}, timeoutMs = 30000) {
       // hint 一并带出（如 PDF 字体未嵌入时的可操作指引），需要处读 err.hint 弹窗展示
       const err = new Error(data.error || `请求失败（${res.status}）`);
       err.hint = data.hint || '';
+      err.status = res.status;
+      err.data = data; // 预约冲突明细等结构化字段（data.conflicts）
       throw err;
     }
     return data;
@@ -321,7 +323,9 @@ export const api = {
   feishuStatus: () => req('/feishu/oauth/status'),
   feishuAuth: () => req('/feishu/oauth/auth'),
   feishuUnbind: () => req('/feishu/oauth/unbind', { method: 'POST' }),
-  // GitHub OAuth 账号绑定（env 未配置时 status.configured=false，入口置灰）
+  // GitHub OAuth：公开开关（登录页据此显示入口）/ 一键登录 / 绑定状态 / 绑定 / 解绑
+  githubConfigured: () => req('/github/oauth/configured'),
+  githubLogin: () => req('/github/oauth/login'),
   githubStatus: () => req('/github/oauth/status'),
   githubAuth: () => req('/github/oauth/auth'),
   githubUnbind: () => req('/github/oauth/unbind', { method: 'POST' }),
@@ -434,6 +438,61 @@ export const api = {
     return req('/purchase/recognize-bom', { method: 'POST', body: fd, headers: token ? { Authorization: `Bearer ${token}` } : {} }, VISION_TIMEOUT);
   },
   purchaseStats: (params) => req(`/purchase/stats${qs(params)}`),
+
+  // ==================== 资源预约（/booking，登录制）====================
+  // 项目档案：任何登录用户可建档（建档者即负责人）；负责人管资源/组队/审批
+  bookingProjects: (scope) => req(`/booking/projects${qs({ scope })}`),
+  bookingProjectCreate: (b) => req('/booking/projects', { method: 'POST', body: JSON.stringify(b) }),
+  bookingProject: (id) => req(`/booking/projects/${id}`),
+  bookingProjectUpdate: (id, b) => req(`/booking/projects/${id}`, { method: 'PUT', body: JSON.stringify(b) }),
+  bookingUserSearch: (q) => req(`/booking/users/search${qs({ q })}`),
+  // 资源台账（kind=space：独占+容量；kind=item：库存数量池）
+  bookingResources: (id, params) => req(`/booking/projects/${id}/resources${qs(params)}`),
+  bookingResourceCreate: (id, b) => req(`/booking/projects/${id}/resources`, { method: 'POST', body: JSON.stringify(b) }),
+  bookingResourceBulk: (id, items) => req(`/booking/projects/${id}/resources/bulk`, { method: 'POST', body: JSON.stringify({ items }) }),
+  // 表格导入：上传只解析不落库（预览核对后仍走 bookingResourceBulk 事务入库）
+  bookingResourceParseImport: (id, kind, file) => {
+    const fd = new FormData();
+    fd.append('kind', kind);
+    fd.append('file', file);
+    const token = localStorage.getItem('ec_token');
+    return req(`/booking/projects/${id}/resources/parse-import`,
+      { method: 'POST', body: fd, headers: token ? { Authorization: `Bearer ${token}` } : {} }, 60000);
+  },
+  // 导入模板下载（xlsx blob；token 走头不进 URL）
+  bookingResourceTemplateBlob: async (id, kind) => {
+    const token = localStorage.getItem('ec_token');
+    const res = await fetch(`${BASE}/booking/projects/${id}/resources/import-template?kind=${kind}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || `模板下载失败（${res.status}）`);
+    }
+    let name = `资源导入模板_${kind === 'space' ? '空间' : '物品'}.xlsx`;
+    const cd = res.headers.get('content-disposition') || '';
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    if (star) { try { name = decodeURIComponent(star[1]); } catch { /* 用默认名 */ } }
+    return { blob: await res.blob(), name };
+  },
+  bookingResourceUpdate: (rid, b) => req(`/booking/resources/${rid}`, { method: 'PUT', body: JSON.stringify(b) }),
+  bookingResourceDelete: (rid) => req(`/booking/resources/${rid}`, { method: 'DELETE' }),
+  bookingResourceArchive: (rid) => req(`/booking/resources/${rid}/archive`, { method: 'POST' }),
+  bookingResourceRestore: (rid) => req(`/booking/resources/${rid}/restore`, { method: 'POST' }),
+  // 固定组队（预约模块内自建，独立于项目小组）
+  bookingTeams: (id) => req(`/booking/projects/${id}/teams`),
+  bookingTeamCreate: (id, b) => req(`/booking/projects/${id}/teams`, { method: 'POST', body: JSON.stringify(b) }),
+  bookingTeamUpdate: (tid, b) => req(`/booking/teams/${tid}`, { method: 'PUT', body: JSON.stringify(b) }),
+  bookingTeamDelete: (tid) => req(`/booking/teams/${tid}`, { method: 'DELETE' }),
+  // 预约
+  bookingCreate: (id, b) => req(`/booking/projects/${id}/bookings`, { method: 'POST', body: JSON.stringify(b) }),
+  bookingConflicts: (id, b) => req(`/booking/projects/${id}/conflicts`, { method: 'POST', body: JSON.stringify(b) }),
+  bookingList: (id, params) => req(`/booking/projects/${id}/bookings${qs(params)}`),
+  bookingTimeline: (id, params) => req(`/booking/projects/${id}/timeline${qs(params)}`),
+  bookingMine: (status) => req(`/booking/bookings/mine${qs({ status })}`),
+  bookingDetail: (bid) => req(`/booking/bookings/${bid}`),
+  bookingApprove: (bid, comment = '') => req(`/booking/bookings/${bid}/approve`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  bookingReject: (bid, reason) => req(`/booking/bookings/${bid}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  bookingCancel: (bid, comment = '') => req(`/booking/bookings/${bid}/cancel`, { method: 'POST', body: JSON.stringify({ comment }) }),
   // 文件预览必须走 blob（token 绝不进 URL）：图片交 ImageViewer，PDF 用 objectURL 新开页
   purchaseFileBlob: async (fid) => {
     const token = localStorage.getItem('ec_token');

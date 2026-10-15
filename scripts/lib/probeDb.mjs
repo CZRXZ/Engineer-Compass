@@ -11,7 +11,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
 export const DEFAULT_API = 'http://localhost:3000/api';
-export const DEFAULT_DB = 'D:\\desktop\\竞赛指导\\backend\\data\\compass.db';
+export const DEFAULT_DB = 'D:\\desktop\\03_代码项目\\竞赛指导\\backend\\data\\compass.db';
 
 // 注意：库路径只认 PROBE_DB，**绝不跟着 PROBE_API 自动推导** —— 推导一旦猜错就是静默误删。
 export function openProbeDb(apiBase) {

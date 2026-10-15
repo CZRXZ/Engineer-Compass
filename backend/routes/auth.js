@@ -40,9 +40,10 @@ const RESERVED_USERNAMES = new Set([
   'account-security', 'feishu.html', 'github',
 ]);
 
-// 邮箱 → 登录名：取邮箱前缀（去非法字符），冲突或撞保留名加数字后缀（email-login 自动注册与密码注册共用）
-function genUsername(mail) {
-  let base = (mail.split('@')[0] || 'user').replace(/[^A-Za-z0-9_]/g, '_').slice(0, 16);
+// 任意来源字符串（邮箱前缀 / GitHub login）→ 合法且不撞名/保留名的登录名：
+// 非字母数字下划线替 _、截 16、无效回落 user、撞保留名或重名加数字后缀
+export function uniqueUsername(baseRaw) {
+  let base = (String(baseRaw ?? '').split('@')[0] || 'user').replace(/[^A-Za-z0-9_]/g, '_').slice(0, 16);
   if (!/^[A-Za-z0-9_]{2,20}$/.test(base)) base = 'user';
   let name = base, n = 0;
   while (db.prepare('SELECT id FROM user WHERE username = ?').get(name) || (n === 0 && RESERVED_USERNAMES.has(name))) {
@@ -50,6 +51,11 @@ function genUsername(mail) {
     name = `${base}${n}`.slice(0, 20);
   }
   return name;
+}
+
+// 邮箱 → 登录名（email-login 自动注册与密码注册共用）
+function genUsername(mail) {
+  return uniqueUsername(mail);
 }
 
 // 返回给前端的 user 形状（统一含 email / avatar，avatar 未设置为 null）

@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import { callGlmOcr, OcrError } from './ocr.js';
 import { VisionError, extractModelText } from './vision.js';
 import { pdfToRecognizeInput, PdfInputError, textUsable } from './pdfDoc.js';
+import { parseCsvText, decodeCsvBuffer } from './csvText.js';
 
 const VISION_URL = () => process.env.VISION_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 const VISION_MODEL = () => process.env.VISION_MODEL || 'glm-4.6v-flash';
@@ -142,41 +143,9 @@ export function recognizeBomXlsx(buf) {
   return { items, warnings: [`工作表「${sn}」`, ...warnings], source: 'xlsx' };
 }
 
-// 极简 quote-aware CSV（支持引号内逗号/换行/双引号转义）
-function parseCsvText(text) {
-  const rows = [];
-  let row = [], field = '', inQ = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQ) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
-        else inQ = false;
-      } else field += ch;
-    } else if (ch === '"') inQ = true;
-    else if (ch === ',') { row.push(field); field = ''; }
-    else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-    else if (ch === '\r') { /* 吞掉，等 \n */ }
-    else field += ch;
-  }
-  if (field !== '' || row.length) { row.push(field); rows.push(row); }
-  return rows;
-}
-
-// csv buffer（utf8/GBK）→ items
+// csv buffer（utf8/GBK）→ items（解码与 quote-aware 解析见 lib/csvText.js）
 export function recognizeBomCsv(buf) {
-  let text;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-  } catch {
-    try {
-      text = new TextDecoder('gbk').decode(buf);
-    } catch {
-      text = buf.toString('utf8'); // 最后兜底（替换字符就替换了）
-    }
-  }
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // BOM
-  const { items, warnings } = parseBomAoa(parseCsvText(text));
+  const { items, warnings } = parseBomAoa(parseCsvText(decodeCsvBuffer(buf)));
   return { items, warnings, source: 'csv' };
 }
 

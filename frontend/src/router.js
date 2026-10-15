@@ -15,6 +15,8 @@ import ShareRedirectView from './components/repo/ShareRedirectView.vue';
 import ExpenseView from './components/ExpenseView.vue';
 import ExpenseGuide from './components/ExpenseGuide.vue';
 import PurchaseView from './components/purchase/PurchaseView.vue';
+import BookingView from './components/booking/BookingView.vue';
+import BookingProjectView from './components/booking/BookingProjectView.vue';
 import HonorView from './components/HonorView.vue';
 import MyView from './components/MyView.vue';
 import AccountSecurityView from './components/account/AccountSecurityView.vue';
@@ -83,6 +85,9 @@ const router = createRouter({
     { path: '/expense/guide', name: 'expense-guide', component: ExpenseGuide },
     // 物料采购：学生申请/负责人·老师按档案审批/发票上传（登录制）
     { path: '/purchase', name: 'purchase', component: PurchaseView },
+    // 资源预约：大厅 + 项目页（周视图甘特/资源台账/固定组队/预约审批）；必须在 /:username 兜底之前
+    { path: '/booking', name: 'booking', component: BookingView },
+    { path: '/booking/:id', name: 'booking-project', component: BookingProjectView },
     // 荣誉墙（公开免登录；内容由管理员在后台维护。复数路径只做重定向，全站单数口径）
     { path: '/honor', name: 'honor', component: HonorView },
     { path: '/honors', redirect: '/honor' },

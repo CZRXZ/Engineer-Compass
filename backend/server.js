@@ -25,8 +25,10 @@ import resource, { publicR } from './routes/resource.js';
 import importPlan from './routes/importPlan.js';
 import feishu from './routes/feishu.js';
 import github from './routes/github.js';
+import { configured as githubConfigured } from './lib/githubClient.js';
 import expense from './routes/expense.js';
 import purchase from './routes/purchase.js';
+import booking from './routes/booking.js';
 import honor, { adminR as adminHonor } from './routes/honor.js';
 import { hasSMTP } from './routes/mailer.js';
 import { accessLog } from './routes/middleware.js';
@@ -68,15 +70,16 @@ app.use('/api/resource', publicR); // 公开分享下载先声明（无鉴权，
 app.use('/api/resource', resource);
 app.use('/api/import', importPlan);
 app.use('/api/feishu', feishu);
-app.use('/api/github', github); // GitHub 账号 OAuth 绑定（账号安全页；未配 env 时仅 status 可用）
+app.use('/api/github', github); // GitHub OAuth：账号绑定 + 一键登录（未配 env 时仅 configured/status 可用）
 app.use('/api/expense', expense);
 app.use('/api/purchase', purchase); // 物料采购申请（登录制：学生申请/负责人·老师按档案审批/发票上传）
+app.use('/api/booking', booking); // 资源预约（项目资源台账：空间独占/物品库存池，资源级审批开关，甘特可视化）
 // 飞书互传工作台页面（独立静态工具页，不参与业务）
 app.use(express.static('public'));
 
 // 健康检查（部署后验证：ai=true 表示线上用户 AI 功能可用；vision=true 表示报销票据图片识别可用；
 // mail=true 表示邮箱登录发真邮件；gitee=true 表示配了 GITEE_ACCESS_TOKEN —— 只是配额更高，
-// 公开仓库不配也能拉，所以它是可选增强而非功能开关）
+// 公开仓库不配也能拉，所以它是可选增强而非功能开关；github=true 表示 GitHub 绑定/一键登录可用）
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, name: 'Engineer-Compass API', time: new Date().toISOString(),
@@ -84,6 +87,7 @@ app.get('/api/health', (req, res) => {
     vision: !!process.env.VISION_API_KEY,
     mail: hasSMTP(),
     gitee: !!process.env.GITEE_ACCESS_TOKEN,
+    github: githubConfigured(),
   });
 });
 

@@ -1,0 +1,68 @@
+// 跨业务页复用的「页面骨架块」样式（2026-10-15 资源预约模块落地时抽出）。
+// 历史：.card/.pv-hero/.stat-cards/.exp-tabbar/.tabchip/.rq-table 等最早写在
+// PurchaseView.vue / ExpenseView.vue 的 <style scoped> 里——scoped 不跨组件，
+// 资源预约页复用同名类时全部裸奔。这里放全局一份；两个旧组件的 scoped 同名规则
+// 特异性（类+[data-v]）高于本文件，页面表现不变；新页面直接吃全局样式。
+// 注意：窄屏不在这里隐藏 .rq-table（有的页没有卡片版），需要 table→卡片切换的
+// 页面在自己 scoped 里处理。
+
+.pv-wrap { max-width: 1060px; margin: 0 auto; padding: 0 16px 20px; }
+.card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+.pv-wrap h2 { margin: 0 0 6px; font-size: 20px; }
+.pv-wrap h3 { margin: 0; font-size: 15px; }
+.sub2 { color: var(--text-2); font-size: 12.5px; margin: 4px 0 0; line-height: 1.6; }
+.pv-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+
+/* 统计卡 */
+.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.stat-card {
+  background: var(--card-bg); border: 1px solid var(--border); border-left: 4px solid var(--border-2);
+  border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.stat-card.ok { border-left-color: #22c55e; }
+.stat-card.warn { border-left-color: #f59e0b; }
+.stat-card.danger { border-left-color: #ef4444; }
+.stat-card.primary { border-left-color: var(--primary); }
+.sc-label { color: var(--text-2); font-size: 12px; }
+.sc-num { font-size: 20px; color: var(--text); font-variant-numeric: tabular-nums; }
+.sc-unit { color: var(--text-3); font-size: 11px; }
+
+/* 标签条 */
+.exp-tabbar {
+  display: flex; gap: 6px; align-items: center; overflow-x: auto; padding: 2px 2px 8px;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.tabchip {
+  flex: none; white-space: nowrap; font: inherit; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-2); border-radius: 18px; padding: 5px 12px; font-size: 13px; cursor: pointer; transition: all .15s;
+}
+.tabchip:hover { border-color: var(--primary); }
+.tabchip.on { background: var(--primary-tint); border-color: var(--primary); color: var(--primary-dark); font-weight: 600; }
+
+.filter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.spacer { flex: 1; }
+.dim { color: var(--text-3); font-size: 12px; }
+.empty-wrap { padding: 20px 0; }
+.row-click { cursor: pointer; }
+.row-click:hover td { background: var(--surface-1); }
+
+/* 表格（窄屏默认保留并由页面包 .table-scroll 横滑；卡片版页面自行切换） */
+.rq-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.rq-table th, .rq-table td { border-bottom: 1px solid var(--border); padding: 8px; text-align: left; }
+.rq-table th { color: var(--text-2); font-weight: 600; font-size: 12.5px; background: var(--surface-1); }
+.table-scroll { overflow-x: auto; }
+
+/* 窄屏卡片（默认不显示，需要的页面在窄屏 scoped 中开启） */
+.rq-cards { display: none; }
+.rq-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+.rc-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.rc-mid { color: var(--text-2); font-size: 12.5px; margin: 5px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-bot { display: flex; justify-content: space-between; font-size: 12.5px; }
+
+@media (max-width: 768px) {
+  .pv-wrap { padding-left: 12px; padding-right: 12px; }
+  .pv-hero { flex-direction: column; }
+  .stat-cards { grid-template-columns: repeat(2, 1fr); }
+  .sc-num { font-size: 17px; }
+  .tabchip { font-size: 12px; padding: 4px 9px; }
+}
