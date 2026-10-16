@@ -100,15 +100,29 @@ try {
   // ---------- 0. 登录闸门 + 注册 5 人 ----------
   let got = await expect('/purchase/events', 401);
   ok('未登录不能访问档案列表(401)', got.ok);
-  const reg = async (k, nick) => api('/auth/register', { method: 'POST', body: { email: mkEmail(k), password: 'pass123456', nickname: nick } });
-  const rL = await reg('l', '采购队长');
-  const rT = await reg('t', `采购老师${stamp}`);
-  const rA = await reg('a', '采购学生甲');
-  const rB = await reg('b', '采购学生乙');
-  const rC = await reg('c', '采购路人');
-  ok('注册 5 用户', !!(rL.token && rT.token && rA.token && rB.token && rC.token));
+  // 业务夹具：注册后立即实名（三模块硬门禁）
+  const reg = async (k, nick, real) => {
+    const r = await api('/auth/register', { method: 'POST', body: { email: mkEmail(k), password: 'pass123456', nickname: nick } });
+    await api('/auth/real-name', { method: 'PUT', token: r.token, body: { real_name: real } });
+    return r;
+  };
+  const rL = await reg('l', '采购队长', '陈领队');
+  const rT = await reg('t', `采购老师${stamp}`, '张老师');
+  const rA = await reg('a', '采购学生甲', '李甲');
+  const rB = await reg('b', '采购学生乙', '李乙');
+  const rC = await reg('c', '采购路人', '赵路');
+  ok('注册 5 用户并完成实名', !!(rL.token && rT.token && rA.token && rB.token && rC.token));
   const tL = rL.token, tT = rT.token, tA = rA.token, tB = rB.token, tC = rC.token;
   const uidT = Number(rT.user.id);
+  // 第 6 人故意不实名：门禁断言
+  const rU = await api('/auth/register', { method: 'POST', body: { email: mkEmail('u'), password: 'pass123456', nickname: '采购未实名' } });
+  const tU = rU.token;
+  got = await expect('/purchase/events', 403, { token: tU });
+  ok('未实名 GET 档案列表 403 need_real_name', got.ok && got.data.code === 'need_real_name', got.data);
+  got = await expect('/purchase/events', 403, { method: 'POST', token: tU, body: { name: '未实名偷建档', kind: '比赛' } });
+  ok('未实名建档 403 need_real_name', got.ok && got.data.code === 'need_real_name', got.data);
+  await api('/auth/real-name', { method: 'PUT', token: tU, body: { real_name: '周六' } });
+  ok('实名后采购模块立即可用', (await expect('/purchase/events', 200, { token: tU })).ok);
 
   // ---------- 1. 建档：重复名 409、创建者自动 leader、任何登录用户可建档 ----------
   const evName1 = `采购冒烟赛${stamp}`;
@@ -200,8 +214,9 @@ try {
   ];
   const ca = await api('/purchase/requests', { method: 'POST', token: tA, body: { event_id: eid1, items: itemsA, remark: '冒烟申请 A' } });
   ridA = Number(ca.detail.id); createdRids.push(ridA);
-  ok('A 提申请 201：金额服务端重算 71+15=86', ca.detail.status === 'pending' && ca.detail.amount === 86
-    && ca.detail.applicant_name === '采购学生甲' && ca.detail.perm.canEdit === true && ca.detail.items.length === 2);
+  ok('A 提申请 201：金额服务端重算 71+15=86 + 申请人快照「真名（昵称）」（不再附 applicant_real_name）', ca.detail.status === 'pending' && ca.detail.amount === 86
+    && ca.detail.applicant_name === '李甲（采购学生甲）' && !('applicant_real_name' in ca.detail)
+    && ca.detail.perm.canEdit === true && ca.detail.items.length === 2);
   // B 的申请含公式注入样本（导出转义断言用）
   const itemsB0 = [{ name: '=cmd', qty: 1, unit_price: 9.9 }];
   const cb0 = await api('/purchase/requests', { method: 'POST', token: tB, body: { event_id: eid1, items: itemsB0 } });
@@ -416,10 +431,11 @@ try {
   const gE1 = stT.by_event.find((x) => Number(x.event_id) === eid1);
   ok('按事件：2 单/通过金额 128.8/待传发票 1(B)', !!gE1 && gE1.count === 2
     && Math.abs(gE1.approved_amount - 128.8) < 1e-6 && gE1.invoice_pending === 1 && gE1.pending_amount === 0 && gE1.rejected_amount === 0);
-  const gA = stT.by_user.find((x) => x.name === '采购学生甲');
-  const gB = stT.by_user.find((x) => x.name === '采购学生乙');
-  ok('按个人：A=86 已传发票(待传 0)；B=42.8 待传发票 1', !!gA && Math.abs(gA.approved_amount - 86) < 1e-6 && gA.invoice_pending === 0
-    && !!gB && Math.abs(gB.approved_amount - 42.8) < 1e-6 && gB.invoice_pending === 1);
+  const gA = stT.by_user.find((x) => x.name === '李甲（采购学生甲）');
+  const gB = stT.by_user.find((x) => x.name === '李乙（采购学生乙）');
+  ok('按个人：A=86 已传发票(待传 0)；B=42.8 待传发票 1（name 为申请时快照，不附 real_name）',
+    !!gA && Math.abs(gA.approved_amount - 86) < 1e-6 && gA.invoice_pending === 0 && !('real_name' in gA)
+    && !!gB && Math.abs(gB.approved_amount - 42.8) < 1e-6 && gB.invoice_pending === 1 && !('real_name' in gB));
   ok('按状态：invoiced 1×86 / approved 1×42.8 / pending·rejected=0',
     stT.by_status.invoiced.count === 1 && stT.by_status.invoiced.amount === 86
     && stT.by_status.approved.count === 1 && Math.abs(stT.by_status.approved.amount - 42.8) < 1e-6
@@ -477,12 +493,12 @@ try {
 
   // ---------- 15. 清理：盘 → 人(级联) → 冒烟档案（档案无 API 删除通道，库清） ----------
   for (const rid of createdRids) rmSync(join(PURCHASE_UP, String(rid)), { recursive: true, force: true });
-  const emails = ['l', 't', 'a', 'b', 'c'].map(mkEmail);
-  const users = db.prepare('SELECT id FROM user WHERE email IN (?,?,?,?,?)').all(...emails);
+  const emails = ['l', 't', 'a', 'b', 'c', 'u'].map(mkEmail);
+  const users = db.prepare('SELECT id FROM user WHERE email IN (?,?,?,?,?,?)').all(...emails);
   for (const u of users) db.prepare('DELETE FROM user WHERE id = ?').run(u.id);
   const evDel = db.prepare("DELETE FROM purchase_event WHERE name LIKE '采购冒烟%'").run();
   db.close();
-  ok(`清理测试用户 ×${users.length} 与冒烟档案 ×${evDel.changes}`, users.length === 5 && evDel.changes >= 4);
+  ok(`清理测试用户 ×${users.length} 与冒烟档案 ×${evDel.changes}`, users.length === 6 && evDel.changes >= 4);
 } catch (e) {
   fail++;
   console.log(`❌ 异常中断: ${e.stack || e.message}`);

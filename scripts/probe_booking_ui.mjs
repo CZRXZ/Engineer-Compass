@@ -91,13 +91,17 @@ try {
 
   // ---- 账号 ----
   const stamp = Date.now();
-  const mk = (tag, nick) => api('/auth/register', {
-    method: 'POST',
-    body: { email: `ui_bk_${tag}_${stamp}@test.dev`, password: 'pass123456', nickname: nick },
-  });
-  const A = await mk('a', `UI预约甲${stamp}`);
-  const B = await mk('b', `UI预约乙${stamp}`);
-  const C = await mk('c', `丙${stamp}`);
+  const mk = async (tag, nick, real) => {
+    const r = await api('/auth/register', {
+      method: 'POST',
+      body: { email: `ui_bk_${tag}_${stamp}@test.dev`, password: 'pass123456', nickname: nick },
+    });
+    const rn = await api('/auth/real-name', { method: 'PUT', token: r.token, body: { real_name: real } });
+    return { ...r, user: rn.user }; // 注入浏览器的 user 卡须是实名后的最新卡
+  };
+  const A = await mk('a', `UI预约甲${stamp}`, '张约甲');
+  const B = await mk('b', `UI预约乙${stamp}`, '李约乙');
+  const C = await mk('c', `丙${stamp}`, '王约丙');
   const cNick = C.user.nickname;
 
   browser = await chromium.launch({ headless: true });
@@ -235,7 +239,9 @@ try {
   ok('pending 琥珀块位置/宽度 = 明天09:00 起 5 格', Math.abs(leftPct - expLeft) < 0.6 && Math.abs(widthPct - expWidth) < 0.4,
     `left=${leftPct} exp=${expLeft.toFixed(2)} width=${widthPct} exp=${expWidth.toFixed(2)}`);
   const blkText = await blk.innerText();
-  ok('块内含姓名/👥1/2.5小时', blkText.includes(A.user.nickname) && blkText.includes('👥1') && blkText.includes('2.5小时'), blkText.replace(/\n/g, ' '));
+  const flatBlock = blkText.replace(/\s/g, '');
+  ok('块内含「真名（昵称）」署名/👥1/2.5小时',
+    flatBlock.includes(`张约甲（${A.user.nickname}）`) && blkText.includes('👥1') && blkText.includes('2.5小时'), blkText.replace(/\n/g, ' '));
 
   // ===== 4. B：重叠圈选被实时拦截 → 临时多人单 =====
   await login(pageB, B, `${WEB}/booking/${pid}`);

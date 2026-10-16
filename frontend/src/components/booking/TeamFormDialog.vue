@@ -8,10 +8,11 @@
       <el-form-item label="成员（全站搜索用户名/昵称，不含队长本人；最多 30 人）">
         <el-select v-model="f.member_ids" multiple filterable remote :remote-method="search"
           :loading="searching" :reserve-keyword="false" style="width: 100%" placeholder="输入用户名或昵称搜索">
-          <el-option v-for="u in options" :key="u.id" :value="u.id" :label="`${u.nickname || u.username}（@${u.username}）`">
+          <el-option v-for="u in options" :key="u.id" :value="u.id"
+            :label="u.username ? `${displayName(u)}（@${u.username}）` : displayName(u)">
             <span class="tf-opt">
-              <el-avatar :size="20" :src="u.avatar || undefined">{{ (u.nickname || u.username).charAt(0) }}</el-avatar>
-              {{ u.nickname || u.username }} <i>@{{ u.username }}</i>
+              <el-avatar :size="20" :src="u.avatar || undefined">{{ displayName(u).charAt(0) }}</el-avatar>
+              {{ displayName(u) }} <i v-if="u.username">@{{ u.username }}</i>
             </span>
           </el-option>
         </el-select>
@@ -29,6 +30,7 @@
 import { ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '../../api.js';
+import { displayName } from '../../utils/displayName.js';
 
 const props = defineProps({
   modelValue: Boolean,
@@ -55,8 +57,10 @@ watch(() => props.modelValue, async (open) => {
   if (!open) return;
   if (props.team) {
     f.value = { name: props.team.name, member_ids: props.team.members.map((m) => m.user_id) };
-    // 回填成员选项（直接用快照名）
-    options.value = props.team.members.map((m) => ({ id: m.user_id, username: '', nickname: m.user_name, avatar: '' }));
+    // 回填成员选项（user_name 为建队时的署名快照，直接显示，不再二次组合）
+    options.value = props.team.members.map((m) => ({
+      id: m.user_id, username: '', nickname: m.user_name, avatar: '',
+    }));
   } else {
     f.value = { name: '', member_ids: [] };
     options.value = [];

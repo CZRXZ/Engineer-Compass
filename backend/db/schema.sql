@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS user (
   password_set  INTEGER NOT NULL DEFAULT 1,    -- 1=已设自有密码 0=初始密码 gkjsdh123 待修改（邮箱验证码注册为 0）
   phone         TEXT DEFAULT '',               -- 手机号（本期仅号段校验、未接 SMS，phone_verified 恒 0 预留）
   phone_verified INTEGER NOT NULL DEFAULT 0,
+  real_name     TEXT NOT NULL DEFAULT '',      -- 真实姓名（预约/报销/采购三模块硬门禁；空=未实名）
   create_time   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 -- idx_user_phone 部分唯一索引在 database.js 迁移链创建（老库 phone 列后补，建索引须在 migCol 后）
@@ -685,7 +686,7 @@ CREATE INDEX IF NOT EXISTS idx_purchase_log_request ON purchase_approval_log(req
 CREATE TABLE IF NOT EXISTS personal_notice (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-  type        TEXT NOT NULL,                  -- password_init | system（预留）
+  type        TEXT NOT NULL,                  -- password_init | realname_required | system（预留）
   title       TEXT NOT NULL,
   content     TEXT DEFAULT '',
   link        TEXT DEFAULT '',               -- 点击跳转的站内路径，如 /account-security

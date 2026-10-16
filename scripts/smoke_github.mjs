@@ -178,6 +178,9 @@ try {
     nuRow.nickname === '新来的 Octo' && nuRow.email === 'brand-new@x.dev' &&
     nuRow.avatar.includes('/u/1003.png') && nuRow.password_set === 1, { nick: nuRow.nickname, email: nuRow.email });
   ok('新号无初始密码公告', db.prepare("SELECT COUNT(*) c FROM personal_notice WHERE user_id=? AND type='password_init'").get(nu.id).c === 0);
+  ok('GitHub 新号默认未实名（gh.name 不自动当真名）', nu.real_name === '' && nuRow.real_name === '', { nu, real: nuRow.real_name });
+  ok('GitHub 建号即发 1 条未读实名公告',
+    db.prepare("SELECT COUNT(*) c FROM personal_notice WHERE user_id=? AND type='realname_required' AND is_read=0").get(nu.id).c === 1);
   ok('审计 via=register + bind 1003', JSON.parse(lastAudit('github-login').detail).via === 'register' && bindCount(1003) === 1);
 
   // ---------- 8. noreply：登录成功但 email=NULL ----------

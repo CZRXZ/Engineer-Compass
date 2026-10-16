@@ -126,8 +126,19 @@ try {
   const rC = await api('/auth/register', { method: 'POST', body: { email: `bkc_${stamp}@x.dev`, password: 'pass123456', nickname: '冒烟同学丙' } });
   const rD = await api('/auth/register', { method: 'POST', body: { email: `bkd_${stamp}@x.dev`, password: 'pass123456', nickname: '冒烟封禁丁' } });
   const [A, B, C, D] = [rA.user, rB.user, rC.user, rD.user];
-  const [tA, tB, tC] = [rA.token, rB.token, rC.token];
-  ok('注册四人', !![A, B, C, D].every((u) => u?.id));
+  const [tA, tB, tC, tD] = [rA.token, rB.token, rC.token, rD.token];
+  ok('注册四人（建号初始均未实名）', !![A, B, C, D].every((u) => u?.id) && [rA, rB, rC, rD].every((r) => r.user.real_name === ''));
+  // 业务夹具：甲/乙/丙注册后立即实名（丁保持未实名，专供门禁断言）
+  const setRn = (token, name) => api('/auth/real-name', { method: 'PUT', token, body: { real_name: name } });
+  await setRn(tA, '王甲');
+  await setRn(tB, '李乙');
+  await setRn(tC, '赵丙');
+
+  // ---------- 0b. 实名硬门禁：未实名整个预约模块不可用 ----------
+  let g2 = await expect('/booking/projects', 403, { token: tD });
+  ok('未实名 GET 项目列表 403 need_real_name', g2.ok && g2.data.code === 'need_real_name', g2.data);
+  g2 = await req('/booking/projects', { method: 'POST', token: tD, body: { name: '丁偷建项目' } });
+  ok('未实名写接口（建档）同样 403 need_real_name', g2.status === 403 && g2.data.code === 'need_real_name', g2.data);
 
   // ---------- 1. 项目 ----------
   let g = await expect('/booking/projects', 200, { token: tC });
@@ -397,11 +408,21 @@ try {
   g = await req(`/booking/projects/${P.id}/conflicts`, { method: 'POST', token: tB,
     body: { resource_id: roomA.id, start_time: slot(8, 9), end_time: slot(8, 10), source: 'solo' } });
   ok('/conflicts 空闲返回 ok', g.status === 200 && g.data.ok === true, g.data);
+  g = await req(`/booking/projects/${P.id}/conflicts`, { method: 'POST', token: tD,
+    body: { resource_id: roomA.id, start_time: slot(8, 9), end_time: slot(8, 10), source: 'solo' } });
+  ok('未实名用户 /conflicts 白名单放行（弹窗实时校验不泄密）', g.status === 200 && g.data.ok === true, g.data);
+  g = await req('/auth/real-name', { method: 'PUT', token: tD, body: { real_name: '孙丁' } });
+  ok('丁完成实名 200', g.status === 200 && g.data.user.real_name === '孙丁', g.data);
+  g = await req('/booking/projects', { token: tD });
+  ok('丁实名后预约模块立即可用 200', g.status === 200 && g.data.projects.some((x) => x.id === P.id), g.status);
 
   // ---------- 7. 资源级审批流 ----------
   const b1 = (await api(`/booking/projects/${P.id}/bookings`, { method: 'POST', token: tB,
     body: { resource_id: roomA.id, start_time: slot(7, 9), end_time: slot(7, 10), source: 'solo', purpose: '乙的申请' } })).booking;
   ok('审批资源上下单为 pending', b1.status === 'pending');
+  ok('下单人快照署名为「真名（昵称）」（快照原样返回，不再附 *_real_name 二次组合）',
+    b1.booker_name === '李乙（冒烟路人乙）' && !('booker_real_name' in b1),
+    { name: b1.booker_name, keys: Object.keys(b1).filter((k) => k.includes('real')) });
   g = await book(tC, { resource_id: roomA.id, start_time: slot(7, 9), end_time: slot(7, 10), source: 'solo' });
   ok('pending 占位：他人重叠 409', g.status === 409);
   const b2 = (await api(`/booking/projects/${P.id}/bookings`, { method: 'POST', token: tC,
@@ -490,8 +511,16 @@ try {
   db.prepare('UPDATE user SET status = 0 WHERE id = ?').run(D.id);
 
   g = await req('/booking/users/search?q=' + encodeURIComponent('冒烟'), { token: tA });
-  ok('全站用户搜索（无需好友关系）命中乙丙', g.status === 200 && g.data.users.length >= 3 &&
-    !g.data.users.some((u) => u.id === A.id), g.data.users?.map((u) => u.id));
+  ok('全站用户搜索（无需好友关系）命中乙丙且带 real_name', g.status === 200 && g.data.users.length >= 3 &&
+    !g.data.users.some((u) => u.id === A.id) &&
+    g.data.users.find((u) => u.id === B.id)?.real_name === '李乙', g.data.users?.map((u) => u.id));
+
+  // 回归（2026-10-16 双层署名 bug）：昵称本身已含真名（学号风格「张玉磊（284806020）」）时不得再包一层
+  const rE = await api('/auth/register', { method: 'POST', body: { email: `bke_${stamp}@x.dev`, password: 'pass123456', nickname: '张玉磊（284806020）' } });
+  await setRn(rE.token, '张玉磊');
+  const bE = await api(`/booking/projects/${P.id}/bookings`, { method: 'POST', token: rE.token,
+    body: { resource_id: roomS.id, start_time: slot(12, 9), end_time: slot(12, 10), source: 'solo', purpose: '双层回归' } });
+  ok('昵称已含真名时落库署名不双层嵌套', bE.booking.booker_name === '张玉磊（284806020）', bE.booking.booker_name);
 
   // 非队长不能用别人的队
   g = await book(tC, { resource_id: roomS.id, start_time: slot(8, 14), end_time: slot(8, 15), source: 'team', team_id: tm.id });

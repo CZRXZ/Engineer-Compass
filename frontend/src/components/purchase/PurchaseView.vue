@@ -224,7 +224,7 @@
                   <el-tag size="small" :type="a.role === 'teacher' ? 'warning' : 'primary'" effect="plain">
                     {{ a.role === 'teacher' ? '老师' : '负责人' }}
                   </el-tag>
-                  {{ a.nickname || a.username }}
+                  {{ displayName(a) }}
                   <span v-if="a.is_creator" class="creator-mark" title="建档者">👑</span>
                   <el-dropdown trigger="click" @command="(role) => switchRole(ev, a, role)">
                     <span class="role-switch">切换▾</span>
@@ -243,7 +243,7 @@
                 <el-select v-model="addUserIdMap[ev.id]" filterable remote :remote-method="(q) => searchUsers(ev.id, q)"
                   :loading="searchingMap[ev.id]" placeholder="搜索用户名/昵称" size="small" style="width: 190px">
                   <el-option v-for="u in (userOptsMap[ev.id] || [])" :key="u.id" :value="u.id"
-                    :label="`${u.nickname || u.username}（@${u.username}）`" />
+                    :label="`${displayName(u)}（@${u.username}）`" />
                 </el-select>
                 <el-radio-group v-model="addRoleMap[ev.id]" size="small">
                   <el-radio-button value="leader">负责人</el-radio-button>
@@ -337,6 +337,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import * as echarts from 'echarts';
 import auth from '../../auth.js';
 import { api } from '../../api.js';
+import { displayName } from '../../utils/displayName.js';
 import AuthView from '../AuthView.vue';
 import RequestFormDialog from './RequestFormDialog.vue';
 import RequestDetailDialog from './RequestDetailDialog.vue';
@@ -503,7 +504,7 @@ async function switchRole(ev, a, role) {
 }
 async function removeApprover(ev, a) {
   try {
-    await ElMessageBox.confirm(`将 ${a.nickname || a.username} 移出「${ev.name}」的审批人？`, '移除审批人', {
+    await ElMessageBox.confirm(`将 ${displayName(a)} 移出「${ev.name}」的审批人？`, '移除审批人', {
       confirmButtonText: '移除', cancelButtonText: '取消', type: 'warning',
     });
     await api.purchaseApproverRemove(ev.id, a.user_id);

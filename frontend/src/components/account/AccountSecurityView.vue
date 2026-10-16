@@ -1,9 +1,10 @@
 <script setup>
-// 账号安全中心：密码 / 邮箱 / 手机号 / 飞书 / GitHub 五张卡。
+// 账号安全中心：实名 / 密码 / 邮箱 / 手机号 / 飞书 / GitHub 六张卡。
 // 入口在「我的」页，与「退出登录」同级；未登录直接内嵌登录卡（同我的页口径）。
 import { ref } from 'vue';
 import auth from '../../auth.js';
 import AuthView from '../AuthView.vue';
+import RealNameCard from './RealNameCard.vue';
 import PasswordCard from './PasswordCard.vue';
 import EmailCard from './EmailCard.vue';
 import PhoneCard from './PhoneCard.vue';
@@ -33,6 +34,7 @@ const pwCard = ref(null);
     </el-alert>
 
     <div class="ac-list">
+      <RealNameCard />
       <PasswordCard ref="pwCard" />
       <EmailCard />
       <PhoneCard />

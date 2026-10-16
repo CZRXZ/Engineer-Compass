@@ -8,7 +8,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { basename, extname } from 'node:path';
 import db from '../db/database.js';
-import { authRequired, logAudit } from './middleware.js';
+import { authRequired, logAudit, realNameRequired, displayNameOf } from './middleware.js';
 import {
   BookingImportError, recognizeBookingXlsx, recognizeBookingCsv, buildBookingTemplate,
   BOOKING_IMPORT_LIMIT_BYTES,
@@ -16,6 +16,14 @@ import {
 
 const r = Router();
 r.use(authRequired);
+// 实名硬门禁：未实名整个预约模块不可用（管理员也不豁免）。
+// 唯一例外 POST /projects/:id/conflicts：弹窗内 400ms 防抖的实时冲突校验，只回时间冲突不泄密，
+// 避免任何边界场景下未实名页面刷出 403 噪音。
+r.use((req, res, next) => (
+  req.method === 'POST' && /^\/projects\/\d+\/conflicts\/?$/.test(req.path)
+    ? next()
+    : realNameRequired(req, res, next)
+));
 
 class HttpError extends Error {
   constructor(status, error) { super(error); this.status = status; }
@@ -154,12 +162,12 @@ function projectOut(p, req) {
       AND (b.booker_id = ? OR EXISTS (SELECT 1 FROM booking_participant bp WHERE bp.booking_id = b.id AND bp.user_id = ?))`
   ).get(p.id, req.user.id, req.user.id).n;
   const creator = p.created_by
-    ? db.prepare('SELECT nickname, username FROM user WHERE id = ?').get(p.created_by)
+    ? db.prepare('SELECT nickname, username, real_name FROM user WHERE id = ?').get(p.created_by)
     : null;
   return {
     id: p.id, name: p.name, description: p.description || '',
     default_approve_mode: p.default_approve_mode, status: p.status,
-    created_by: p.created_by, creator_name: creator ? (creator.nickname || creator.username) : '',
+    created_by: p.created_by, creator_name: creator ? displayNameOf(creator) : '',
     create_time: p.create_time, close_time: p.close_time,
     myRole: p.created_by === req.user.id ? 'owner' : null,
     canManage: canManageProject(req, p),
@@ -229,13 +237,13 @@ function normParticipants(projectId, body, me) {
 
   const ids = [...idSet];
   const users = db.prepare(
-    `SELECT id, username, nickname, status FROM user WHERE id IN (${ids.map(() => '?').join(',')})`
+    `SELECT id, username, nickname, real_name, status FROM user WHERE id IN (${ids.map(() => '?').join(',')})`
   ).all(...ids);
   if (users.length !== ids.length) throw new HttpError(400, '参与人中包含不存在的账号');
   if (users.some((u) => u.status === 1)) throw new HttpError(400, '参与人中包含已封禁账号');
   return {
     source, team_id: teamId, headcount: users.length,
-    users: users.map((u) => ({ id: u.id, user_name: u.nickname || u.username })),
+    users: users.map((u) => ({ id: u.id, user_name: displayNameOf(u) })),
   };
 }
 
@@ -390,9 +398,9 @@ r.get('/users/search', ah((req, res) => {
   if (!q) return res.json({ users: [] });
   const like = `%${q}%`;
   const users = db.prepare(
-    `SELECT id, username, nickname, avatar FROM user
-     WHERE id != ? AND status != 1 AND (username LIKE ? OR nickname LIKE ?) ORDER BY id LIMIT 10`
-  ).all(req.user.id, like, like);
+    `SELECT id, username, nickname, real_name, avatar FROM user
+     WHERE id != ? AND status != 1 AND (username LIKE ? OR nickname LIKE ? OR real_name LIKE ?) ORDER BY id LIMIT 10`
+  ).all(req.user.id, like, like, like);
   res.json({ users });
 }));
 
@@ -574,11 +582,18 @@ r.post('/resources/:rid/restore', ah((req, res) => {
 
 // ==================== 固定组队 ====================
 function teamOut(t, req) {
-  const members = db.prepare('SELECT user_id, user_name FROM booking_team_member WHERE team_id = ? ORDER BY ord, user_id').all(t.id);
+  // owner_name/member.user_name 均为建队/改队时的署名快照（displayNameOf 文本），直接返回供前端原样渲染，
+  // 不再 JOIN 当前 real_name —— 快照文本已是「真名（昵称）」，再组合一次会叠成双层。
+  const members = db.prepare(
+    `SELECT m.user_id, m.user_name
+       FROM booking_team_member m
+      WHERE m.team_id = ? ORDER BY m.ord, m.user_id`
+  ).all(t.id);
   const p = getProject(t.project_id);
   return {
     id: t.id, project_id: t.project_id, name: t.name,
-    owner_id: t.owner_id, owner_name: t.owner_name, create_time: t.create_time,
+    owner_id: t.owner_id, owner_name: t.owner_name,
+    create_time: t.create_time,
     members: members.map((m) => ({ user_id: m.user_id, user_name: m.user_name })),
     canManage: !!req.user.is_admin || t.owner_id === req.user.id || canManageProject(req, p),
     isOwner: t.owner_id === req.user.id,
@@ -595,12 +610,12 @@ function normMemberIds(ids, me, projectId) {
   const list = [...set];
   if (!list.length) return [];
   const users = db.prepare(
-    `SELECT id, username, nickname, status FROM user WHERE id IN (${list.map(() => '?').join(',')})`
+    `SELECT id, username, nickname, real_name, status FROM user WHERE id IN (${list.map(() => '?').join(',')})`
   ).all(...list);
   if (users.length !== list.length) throw new HttpError(400, '成员中包含不存在的账号');
   if (users.some((u) => u.status === 1)) throw new HttpError(400, '成员中包含已封禁账号');
   // 不允许把同一项目别的队的成员？允许多队复用，不做排他
-  return users.map((u) => ({ id: u.id, user_name: u.nickname || u.username }));
+  return users.map((u) => ({ id: u.id, user_name: displayNameOf(u) }));
 }
 
 r.get('/projects/:id/teams', ah((req, res) => {
@@ -622,7 +637,7 @@ r.post('/projects/:id/teams', ah((req, res) => {
   const teamId = tx(() => {
     const info = db.prepare(
       'INSERT INTO booking_team (project_id, name, owner_id, owner_name) VALUES (?,?,?,?)'
-    ).run(p.id, name, req.user.id, req.user.nickname || req.user.username);
+    ).run(p.id, name, req.user.id, displayNameOf(req.user));
     const ins = db.prepare('INSERT INTO booking_team_member (team_id, user_id, user_name, ord) VALUES (?,?,?,?)');
     members.forEach((m, i) => ins.run(info.lastInsertRowid, m.id, m.user_name, i));
     return info.lastInsertRowid;
@@ -666,17 +681,21 @@ r.delete('/teams/:tid', ah((req, res) => {
 }));
 
 // ==================== 预约 ====================
+// user_name 是下单瞬间的署名快照（displayNameOf 文本），原样返回；avatar 仍取实时值
 const participantRows = (bookingId) => db.prepare(
   `SELECT bp.user_id, bp.user_name, bp.is_booker, u.avatar
    FROM booking_participant bp LEFT JOIN user u ON u.id = bp.user_id
    WHERE bp.booking_id = ? ORDER BY bp.ord, bp.id`
 ).all(bookingId).map((x) => ({
-  user_id: x.user_id, user_name: x.user_name, avatar: x.avatar || null, is_booker: !!x.is_booker,
+  user_id: x.user_id, user_name: x.user_name,
+  avatar: x.avatar || null, is_booker: !!x.is_booker,
 }));
 
 const bookingOut = (b, req) => {
   const rs = getResource(b.resource_id);
   const p = getProject(b.project_id);
+  // booker_name/approver_name/cancel_by_name 均为落库署名快照（displayNameOf 文本），前端原样渲染即可，
+  // 不再附实时 real_name —— 快照已含「真名（昵称）」，再与实时真名组合只会叠成双层。
   return {
     ...b,
     is_space: !!rs?.is_space, kind: rs?.kind, resource_name: rs?.name || '',
@@ -731,11 +750,11 @@ function createBooking(req, p, body, { conflictsOnly = false, excludeId = 0 } = 
          status, source, team_id, booker_id, booker_name)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(p.id, rs.id, startStr, endStr, qty, part.headcount, purpose,
-      status, part.source, part.team_id, req.user.id, req.user.nickname || req.user.username);
+      status, part.source, part.team_id, req.user.id, displayNameOf(req.user));
     const insP = db.prepare('INSERT INTO booking_participant (booking_id, user_id, user_name, is_booker, ord) VALUES (?,?,?,?,?)');
     part.users.forEach((u, i) => insP.run(info.lastInsertRowid, u.id, u.user_name, u.id === req.user.id ? 1 : 0, i));
     db.prepare('INSERT INTO booking_log (booking_id, action, actor_id, actor_name, comment) VALUES (?,?,?,?,?)')
-      .run(info.lastInsertRowid, 'created', req.user.id, req.user.nickname || req.user.username, '');
+      .run(info.lastInsertRowid, 'created', req.user.id, displayNameOf(req.user), '');
     return info.lastInsertRowid;
   });
   if (conflictsOnly) {
@@ -853,7 +872,11 @@ r.get('/bookings/:id', ah((req, res) => {
   if (!b) throw new HttpError(404, '预约不存在');
   const p = getProject(b.project_id);
   if (!canViewProject(req, p)) throw new HttpError(404, '预约不存在');
-  const logs = db.prepare('SELECT * FROM booking_log WHERE booking_id = ? ORDER BY id').all(b.id);
+  // actor_name 为操作时的署名快照，原样返回
+  const logs = db.prepare(
+    `SELECT bl.* FROM booking_log bl
+      WHERE bl.booking_id = ? ORDER BY bl.id`
+  ).all(b.id);
   res.json({ booking: bookingOut(b, req), logs });
 }));
 
@@ -875,9 +898,9 @@ r.post('/bookings/:id/approve', ah((req, res) => {
     db.prepare(
       `UPDATE booking SET status = 'confirmed', approver_id = ?, approver_name = ?, approve_time = datetime('now','localtime'),
          reject_reason = '', update_time = datetime('now','localtime') WHERE id = ?`
-    ).run(req.user.id, req.user.nickname || req.user.username, b.id);
+    ).run(req.user.id, displayNameOf(req.user), b.id);
     db.prepare('INSERT INTO booking_log (booking_id, action, actor_id, actor_name, comment) VALUES (?,?,?,?,?)')
-      .run(b.id, 'approved', req.user.id, req.user.nickname || req.user.username, trim(req.body?.comment));
+      .run(b.id, 'approved', req.user.id, displayNameOf(req.user), trim(req.body?.comment));
   });
   const fresh = getBooking(b.id);
   logAudit(req, 'booking-approve', `${p.name}/${rs.name}`, { booking_id: b.id });
@@ -904,9 +927,9 @@ r.post('/bookings/:id/reject', ah((req, res) => {
     db.prepare(
       `UPDATE booking SET status = 'rejected', approver_id = ?, approver_name = ?, approve_time = datetime('now','localtime'),
          reject_reason = ?, update_time = datetime('now','localtime') WHERE id = ?`
-    ).run(req.user.id, req.user.nickname || req.user.username, reason, b.id);
+    ).run(req.user.id, displayNameOf(req.user), reason, b.id);
     db.prepare('INSERT INTO booking_log (booking_id, action, actor_id, actor_name, comment) VALUES (?,?,?,?,?)')
-      .run(b.id, 'rejected', req.user.id, req.user.nickname || req.user.username, reason);
+      .run(b.id, 'rejected', req.user.id, displayNameOf(req.user), reason);
   });
   logAudit(req, 'booking-reject', `${p.name}/${rs.name}`, { booking_id: b.id });
   const link = bookingLink(p.id, b);
@@ -929,7 +952,7 @@ r.post('/bookings/:id/cancel', ah((req, res) => {
   if (!forced && b.status === 'confirmed' && nowSlot() >= b.start_time)
     throw new HttpError(400, '预约已开始，如需取消请联系项目负责人');
   const rs = getResource(b.resource_id);
-  const actorName = req.user.nickname || req.user.username;
+  const actorName = displayNameOf(req.user);
 
   tx(() => {
     db.prepare(

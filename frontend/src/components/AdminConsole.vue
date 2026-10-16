@@ -18,6 +18,8 @@ const ACTION_LABELS = {
   'friend-request': '好友申请', 'friend-accept': '接受好友', 'friend-reject': '拒绝好友', 'dm-send': '发送私信',
   'comment-share': '分享评论', 'comment-team': '小组评论',
   'user-status': '封禁/禁言', 'user-role': '角色管理',
+  'realname-set': '实名认证', 'realname-change': '修改实名', 'realname-remind': '补发实名提醒',
+  'password-remind': '补发改密提醒',
   'post-delete': '删除帖子', 'comment-delete': '删除评论',
   'announce-create': '发布公告', 'announce-update': '编辑公告', 'announce-delete': '删除公告',
   'resource-upload': '上传资源', 'resource-delete': '删除资源', 'resource-admin-delete': '管理员删资源',
@@ -103,6 +105,27 @@ async function remindPassword() {
     ElMessage.error(e.message);
   } finally {
     remindLoading.value = false;
+  }
+}
+
+// 一键提醒所有未实名用户（预约/报销/采购三模块硬门禁；已有未读提醒的去重）
+const realnameLoading = ref(false);
+async function remindRealName() {
+  try {
+    await ElMessageBox.confirm(
+      '将向所有未实名用户补发一条实名提醒公告（已有未读提醒的不重复发送）。确定发送？',
+      '补发实名提醒', { type: 'warning', confirmButtonText: '发送' });
+  } catch { return; }
+  realnameLoading.value = true;
+  try {
+    const r = await api.adminRealnameRemind();
+    if (r.total === 0) ElMessage.success('所有用户都已实名认证 🎉');
+    else if (r.sent === 0) ElMessage.info('未实名用户都已有未读提醒，无需重复发送');
+    else ElMessage.success(r.message);
+  } catch (e) {
+    ElMessage.error(e.message);
+  } finally {
+    realnameLoading.value = false;
   }
 }
 
@@ -431,12 +454,15 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
       <!-- ========== Tab1 用户管理 ========== -->
       <el-tab-pane label="👤 用户管理" name="users">
         <div class="toolbar">
-          <el-input v-model="users.q" placeholder="搜索昵称 / 邮箱 / 用户名" clearable style="width: 260px"
+          <el-input v-model="users.q" placeholder="搜索昵称 / 真名 / 邮箱 / 用户名" clearable style="width: 280px"
             @keyup.enter="users.page = 1; loadUsers()" @clear="users.page = 1; loadUsers()">
             <template #append><el-button @click="users.page = 1; loadUsers()">搜索</el-button></template>
           </el-input>
           <el-button type="warning" plain :loading="remindLoading" @click="remindPassword">
             🔔 提醒未改密用户
+          </el-button>
+          <el-button type="danger" plain :loading="realnameLoading" @click="remindRealName">
+            🪪 提醒未实名用户
           </el-button>
           <span class="count">共 {{ users.total }} 位用户</span>
         </div>
@@ -454,6 +480,12 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
             <template #default="{ row }">
               <el-tag v-if="row.password_set === false" size="small" type="danger" effect="dark">初始密码</el-tag>
               <el-tag v-else size="small" type="success" plain>已设置</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="实名" width="110">
+            <template #default="{ row }">
+              <el-tag v-if="row.real_name" size="small" type="success" plain>{{ row.real_name }}</el-tag>
+              <el-tag v-else size="small" type="danger" effect="dark">未实名</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="90">

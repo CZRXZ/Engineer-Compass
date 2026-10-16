@@ -12,7 +12,13 @@ import { join, dirname, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import db from '../db/database.js';
-import { authRequired, optionalAuth, logAudit, genInviteCode } from './middleware.js';
+import { authRequired, optionalAuth, logAudit, genInviteCode, realNameRequired, displayNameOf } from './middleware.js';
+
+// 负责人本人的账号别名集合：真实姓名 / 昵称 / 用户名 / 「真名（昵称）」任一命中即视为本人
+// （花名册姓名是自由文本，负责人可在实名后用组合名给自己记账/入册）
+const selfAliases = (u) => new Set(
+  [u?.username, u?.nickname, u?.real_name, displayNameOf(u)].filter(Boolean).map((x) => String(x).trim())
+);
 import {
   CAT_KEYS, SLOTS, normData, safeParseData, sanitizeName, mimeByExt, isInlineMime, catMeta,
 } from '../lib/expenseMeta.js';
@@ -241,10 +247,11 @@ o.post('/:code/row', (req, res) => {
       if (ctx.role !== 'owner') {
         return res.status(403).json({ error: '请先认领你的身份（打开链接后选自己姓名）' });
       }
-      owner_name = String(body.owner_name || '').trim().slice(0, 20);
+      const rawName = String(body.owner_name || '').trim();
+      owner_name = rawName.slice(0, 20);
       const inRoster = db.prepare('SELECT id FROM expense_member WHERE project_id = ? AND name = ?').get(p.id, owner_name);
-      const isMe = owner_name && (owner_name === String(req.user?.username || '')
-        || (req.user?.nickname && owner_name === String(req.user.nickname)));
+      const aliases = selfAliases(req.user);
+      const isMe = owner_name && (aliases.has(owner_name) || aliases.has(rawName));
       if (!owner_name || owner_name === '队伍' || (!inRoster && !isMe)) {
         return res.status(400).json({ error: '出钱人需是项目名单成员或负责人本人（跨队成员也可）' });
       }
@@ -676,6 +683,7 @@ r.use('/o', o);
 
 // ==================== 负责人组：/:id…（需登录） ====================
 r.use(authRequired);
+r.use(realNameRequired);   // 实名硬门禁：负责人建项/录入需实名（管理员不豁免）；/o 邀请码匿名只读链路在其之前挂载，不受影响
 
 // 找本人负责的项目；不属于自己 → 403（不泄漏他人项目存在性）
 function ownProject(req, res) {
@@ -825,7 +833,8 @@ r.post('/:id/team/:tid/member', (req, res) => {
   if (!db.prepare('SELECT id FROM expense_team WHERE id = ? AND project_id = ?').get(tid, p.id)) {
     return res.status(404).json({ error: '队伍不存在' });
   }
-  const name = String((req.body || {}).name || '').trim().slice(0, 20);
+  const rawName = String((req.body || {}).name || '').trim();
+  const name = rawName.slice(0, 20);
   if (!name) return res.status(400).json({ error: '请填写姓名' });
   if (db.prepare('SELECT id FROM expense_member WHERE project_id = ? AND name = ?').get(p.id, name)) {
     return res.status(409).json({ error: '项目内已有同名成员（重名者请加队名后缀区分）' });
@@ -833,8 +842,9 @@ r.post('/:id/team/:tid/member', (req, res) => {
   const mx = db.prepare('SELECT COALESCE(MAX(ord),0) AS n FROM expense_member WHERE project_id = ?').get(p.id).n;
   const ins = db.prepare('INSERT INTO expense_member (project_id, team_id, name, ord) VALUES (?,?,?,?)')
     .run(p.id, tid, name, mx + 1);
-  // 本人快捷标记：姓名与负责人登录账号昵称/用户名一致 → 互斥置 is_owner（项目内仅一个负责人条目）
-  const isMe = name === String(req.user?.nickname || '').trim() || name === String(req.user?.username || '').trim();
+  // 本人快捷标记：姓名命中负责人账号别名（真名/昵称/用户名/组合名）→ 互斥置 is_owner（项目内仅一个负责人条目）
+  const aliases = selfAliases(req.user);
+  const isMe = aliases.has(name) || aliases.has(rawName);
   if (isMe) {
     db.prepare('UPDATE expense_member SET is_owner = 0 WHERE project_id = ? AND id != ?').run(p.id, Number(ins.lastInsertRowid));
     db.prepare('UPDATE expense_member SET is_owner = 1 WHERE id = ?').run(Number(ins.lastInsertRowid));

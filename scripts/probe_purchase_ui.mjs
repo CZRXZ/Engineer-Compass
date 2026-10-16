@@ -95,10 +95,14 @@ try {
   // ---- 账号 + 档案（API 预置）----
   const stamp = Date.now();
   const evName = `UI探针赛${stamp}`;
-  const mk = (tag, nick) => api('/auth/register', { method: 'POST', body: { email: `ui_${tag}_${stamp}@test.dev`, password: 'pass123456', nickname: nick } });
-  const leader = await mk('l', 'UI队长');
-  const teacher = await mk('t', `UI老师${stamp}`);
-  const student = await mk('a', 'UI学生甲');
+  const mk = async (tag, nick, real) => {
+    const r = await api('/auth/register', { method: 'POST', body: { email: `ui_${tag}_${stamp}@test.dev`, password: 'pass123456', nickname: nick } });
+    const rn = await api('/auth/real-name', { method: 'PUT', token: r.token, body: { real_name: real } });
+    return { ...r, user: rn.user }; // 注入浏览器的 user 卡须是实名后的最新卡
+  };
+  const leader = await mk('l', 'UI队长', '陈队');
+  const teacher = await mk('t', `UI老师${stamp}`, '张老师');
+  const student = await mk('a', 'UI学生甲', '李同学');
   const ev = await api('/purchase/events', { method: 'POST', token: leader.token, body: { name: evName, kind: '比赛', description: 'UI 探针档案' } });
   const eid = ev.event.id;
   await api(`/purchase/events/${eid}/approvers`, { method: 'POST', token: leader.token, body: { user_id: teacher.user.id, role: 'teacher' } });
@@ -240,7 +244,7 @@ try {
   const statsText = await page.locator('.st-table').first().innerText();
   ok('按档案统计出现该赛 + 通过金额 29.00', statsText.includes(evName) && statsText.includes('29.00'));
   const userStatText = await page.locator('.st-table').nth(1).innerText();
-  ok('按个人统计出现 UI学生甲', userStatText.includes('UI学生甲'));
+  ok('按个人统计出现「李同学（UI学生甲）」组合署名', userStatText.replace(/\s/g, '').includes('李同学（UI学生甲）'), userStatText.replace(/\n/g, ' ').slice(0, 120));
   const box = await page.locator('.chart canvas').boundingBox();
   ok('ECharts 画布真实布局（宽>100）', !!box && box.width > 100, box ? `${box.width}x${box.height}` : '无 canvas');
 
@@ -282,7 +286,7 @@ try {
   const tdb = new DatabaseSync(dbPath);
   tdb.prepare("UPDATE purchase_event SET status='closed' WHERE 1=1").run();
   tdb.close();
-  const fresh = await mk('fresh', 'UI新人');
+  const fresh = await mk('fresh', 'UI新人', '王新人');
   await login(fresh);
   // 零档案：不弹确认框，直接是建档弹窗
   await page.getByRole('button', { name: '新建采购申请' }).click();

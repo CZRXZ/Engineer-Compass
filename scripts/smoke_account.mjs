@@ -3,7 +3,8 @@
 //   管理员补发提醒（不重复/只发未改密/非管理员 403）→ 改密两路（旧密码/邮箱验证码，含各种 400）→
 //   公开找回密码（防枚举：不存在邮箱同文案、无 dev_code）→ 手机号（格式/409/解绑）→
 //   GitHub 未配置口径（status configured=false / auth 400）+ 飞书 status 不受影响 →
-//   密码注册 password_set=1 且无公告 / 保留用户名 share → share1。
+//   密码注册 password_set=1 且无初始密码公告（但有实名公告）/ 保留用户名 share → share1 →
+//   实名认证（401/400 矩阵/200/公告自动已读/审计/补发去重/管理员不豁免门禁）。
 //
 // 全程沙盒：临时库 + 临时附件目录 + 临时 cwd（无 .env → mailer 开发模式回传 dev_code），
 // 不打正在运行的开发实例、不碰真实 compass.db。
@@ -116,13 +117,16 @@ try {
 
   // ---------- 3. 迁移回填断言（直连临时库只读） ----------
   const db = new DatabaseSync(dbPath, { readOnly: true });
-  ok('迁移闸门 user_version=2（v1 密码/slug + v2 资源两类）', Number(db.prepare('PRAGMA user_version').get().user_version) === 2);
+  ok('迁移闸门 user_version=3（v1 密码/slug + v2 资源两类 + v3 实名公告）', Number(db.prepare('PRAGMA user_version').get().user_version) === 3);
   const olds = db.prepare('SELECT id,username,email,password_hash,password_set FROM user ORDER BY id').all();
   ok('老用户 3 人全部 password_set=0', olds.length === 3 && olds.every((u) => u.password_set === 0), olds.map((u) => u.password_set));
   ok('密码哈希已被重置（非旧 junk$00，salt$64hex）', olds.every((u) =>
     /^[0-9a-f]{32}\$[0-9a-f]{128}$/.test(u.password_hash)));
   const notices = db.prepare("SELECT user_id,type,title,content,link,is_read FROM personal_notice WHERE type='password_init' ORDER BY user_id").all();
   ok('每人恰好 1 条初始密码公告', notices.length === 3 && notices.every((n) => n.is_read === 0 && n.link === '/account-security' && n.content.includes('gkjsdh123')));
+  const rnNotices = db.prepare("SELECT user_id,type,title,link,is_read FROM personal_notice WHERE type='realname_required' ORDER BY user_id").all();
+  ok('v3 迁移：3 名存量未实名用户各补发 1 条实名公告（未读、链接账号安全页）',
+    rnNotices.length === 3 && rnNotices.every((n, i) => n.is_read === 0 && n.link === '/account-security' && n.user_id === i + 1), rnNotices);
   const slug1 = db.prepare('SELECT slug FROM share_post WHERE id=1').get().slug;
   const slug2 = db.prepare('SELECT slug FROM share_post WHERE id=2').get().slug;
   const slug3 = db.prepare('SELECT slug FROM share_post WHERE id=3').get().slug;
@@ -148,9 +152,12 @@ try {
 
   // ---------- 5. 个人公告 ----------
   const uc0 = await api('/notifications/unread-count', { token: tA });
-  ok('未读计数含 notices=1 且计入 total', uc0.notices === 1 && uc0.total >= 1, uc0);
+  ok('未读计数含 notices=2（初始密码 + 实名提醒）且计入 total', uc0.notices === 2 && uc0.total >= 2, uc0);
   const pn = await api('/notifications/personal', { token: tA });
-  ok('个人公告列表 1 条，标题/链接正确', pn.rows.length === 1 && pn.rows[0].title.includes('初始密码') && pn.rows[0].link === '/account-security', pn);
+  ok('个人公告列表 2 条：初始密码 + 实名提醒，链接均指向账号安全页',
+    pn.rows.length === 2 && pn.rows.every((n) => n.link === '/account-security')
+    && pn.rows.some((n) => n.type === 'password_init' && n.title.includes('初始密码'))
+    && pn.rows.some((n) => n.type === 'realname_required' && n.title.includes('实名')), pn);
 
   // ---------- 6. 邮箱验证码自动注册（新用户也落初始密码） ----------
   const stamp = Date.now().toString(36);
@@ -194,7 +201,7 @@ try {
   const rA2 = await api('/auth/login', { method: 'POST', body: { email: 'alice@old.dev', password: 'aliceNewPw9' } });
   ok('新密码可登录', rA2.user.password_set === true);
   const ucA = await api('/notifications/unread-count', { token: tA });
-  ok('改密成功后初始密码公告自动已读（notices=0）', ucA.notices === 0, ucA);
+  ok('改密成功后初始密码公告自动已读（实名公告仍在 notices=1）', ucA.notices === 1, ucA);
 
   // ---------- 10. Bob：邮箱验证码方式改密 ----------
   const bCode = await devCode('bob@old.dev', 'reset');
@@ -213,7 +220,10 @@ try {
   rem = await api('/admin/notices/password-remind', { method: 'POST', token: tA });
   ok('补发#3：刚补过均未读 → sent=0 不重复', rem.sent === 0 && rem.total === 2, rem);
   const pnC = await api('/notifications/personal', { token: tC });
-  ok('Carol 两条公告（迁移一条+补发一条）', pnC.rows.length === 2, pnC.rows.length);
+  ok('Carol 三条公告（初始密码迁移+实名迁移+改密补发）',
+    pnC.rows.length === 3
+    && pnC.rows.filter((x) => x.type === 'password_init').length === 2
+    && pnC.rows.some((x) => x.type === 'realname_required'), pnC.rows.length);
 
   // ---------- 12. Carol：公开找回密码流 ----------
   const cCode = await devCode('carol@old.dev', 'reset');
@@ -261,12 +271,71 @@ try {
   const rE = await api('/auth/register', { method: 'POST', body: { email: erinMail, password: 'erinSecret9', nickname: '艾琳' } });
   ok('密码注册 201 且 password_set=true', rE.user.password_set === true && rE.user.nickname === '艾琳', rE.user);
   const ucE = await api('/notifications/unread-count', { token: rE.token });
-  ok('密码注册用户无初始密码公告', ucE.notices === 0, ucE);
+  ok('密码注册用户无初始密码公告，但建号即发实名提醒（notices=1）', ucE.notices === 1, ucE);
+  const pnE = await api('/notifications/personal', { token: rE.token });
+  ok('该公告为 realname_required 且未读', pnE.rows.length === 1 && pnE.rows[0].type === 'realname_required' && pnE.rows[0].is_read === 0, pnE);
+  const tE = rE.token;
+  const erinId = rE.user.id;
 
   // ---------- 17. 保留用户名避让 ----------
   const shareCode = await devCode('share@r.dev', 'login');
   const rS = await api('/auth/email-login', { method: 'POST', body: { email: 'share@r.dev', code: shareCode } });
   ok('顶层保留名 share → 用户名自动避让（share1）', rS.user.username === 'share1', rS.user);
+
+  // ---------- 18. 实名认证（校验矩阵 / 公告联动 / 审计 / 门禁不豁免管理员 / 补发去重） ----------
+  g = await expect('/auth/real-name', 401, { method: 'PUT', body: { real_name: '张三' } });
+  ok('匿名设置实名 401', g.ok);
+  const badNames = [
+    ['空串', ''], ['单字母', 'a'], ['单字', '张'], ['纯数字', '123456'],
+    ['纯符号', '!!!'], ['间隔号结尾', '张·'], ['emoji', '😀😀'], ['21 字超长', 'A'.repeat(21)],
+  ];
+  for (const [label, bad] of badNames) {
+    const r = await expect('/auth/real-name', 400, { method: 'PUT', token: tE, body: { real_name: bad } });
+    ok(`非法姓名 400：${label}`, r.ok, r.data);
+  }
+  let rn = await api('/auth/real-name', { method: 'PUT', token: tE, body: { real_name: '   张三   ' } });
+  ok('首次实名 200：trim+空白折叠为「张三」，userCard 回写', rn.user.real_name === '张三', rn.user);
+  const ucE2 = await api('/notifications/unread-count', { token: tE });
+  ok('实名后 realname_required 公告自动已读（notices=0）', ucE2.notices === 0, ucE2);
+  let alogs = await api(`/admin/logs?userId=${erinId}&action=realname-set&size=5`, { token: tA });
+  ok('审计 realname-set 落库', alogs.list.some((l) => l.action === 'realname-set' && l.target === '张三'), alogs.list);
+  rn = await api('/auth/real-name', { method: 'PUT', token: tE, body: { real_name: 'John Smith Jr.' } });
+  ok('修改实名 200：允许字母/空格/点', rn.user.real_name === 'John Smith Jr.', rn.user);
+  alogs = await api(`/admin/logs?userId=${erinId}&action=realname-change&size=5`, { token: tA });
+  ok('审计 realname-change 落库且 detail.old=张三',
+    alogs.list.some((l) => l.action === 'realname-change' && l.target === 'John Smith Jr.' && l.detail?.old === '张三'), alogs.list);
+  rn = await api('/auth/real-name', { method: 'PUT', token: tE, body: { real_name: '李·小龙' } });
+  ok('间隔号姓名合法', rn.user.real_name === '李·小龙', rn.user);
+
+  // 管理员不豁免：Alice（is_admin）此时仍未实名，三模块一律 403
+  g = await expect('/booking/projects', 403, { token: tA });
+  ok('管理员未实名访问预约模块同样 403 need_real_name（不豁免）', g.ok && g.data.code === 'need_real_name', g.data);
+
+  // 补发实名提醒：此时未实名 5 人（alice/bob/carol/dave/share），其中 carol/dave 公告已读 → 补发 2
+  rem = await api('/admin/notices/realname-remind', { method: 'POST', token: tA });
+  ok('补发#1：5 人未实名、2 人公告已读 → sent=2 total=5', rem.sent === 2 && rem.total === 5, rem);
+  rem = await api('/admin/notices/realname-remind', { method: 'POST', token: tA });
+  ok('补发#2：均有未读公告 → sent=0', rem.sent === 0 && rem.total === 5, rem);
+
+  // 新注册用户：建号即有公告，不重复补；已读后补发才再发
+  const frankMail = `frank_${stamp}@new.dev`;
+  const rF = await api('/auth/register', { method: 'POST', body: { email: frankMail, password: 'frankSecret9', nickname: '弗兰克' } });
+  const tF = rF.token;
+  const countRn = async (token) => {
+    const r = await api('/notifications/personal', { token });
+    const rows = r.rows.filter((x) => x.type === 'realname_required');
+    return { all: rows.length, unread: rows.filter((x) => x.is_read === 0).length };
+  };
+  ok('Frank 建号即有 1 条实名公告（未读）', JSON.stringify(await countRn(tF)) === JSON.stringify({ all: 1, unread: 1 }));
+  rem = await api('/admin/notices/realname-remind', { method: 'POST', token: tA });
+  ok('补发#3：6 人未实名但均有未读公告 → sent=0 total=6（Frank 不重复）', rem.sent === 0 && rem.total === 6, rem);
+  ok('Frank 仍恰有 1 条实名公告', JSON.stringify(await countRn(tF)) === JSON.stringify({ all: 1, unread: 1 }));
+  g = await expect('/admin/notices/realname-remind', 403, { method: 'POST', token: tF });
+  ok('非管理员补发实名提醒 403', g.ok);
+  await api('/notifications/personal/read-all', { method: 'POST', token: tF });
+  rem = await api('/admin/notices/realname-remind', { method: 'POST', token: tA });
+  ok('补发#4：Frank 公告已读 → 仅补 Frank 一条 sent=1', rem.sent === 1 && rem.total === 6, rem);
+  ok('Frank 变 2 条实名公告、1 条未读', JSON.stringify(await countRn(tF)) === JSON.stringify({ all: 2, unread: 1 }));
 } catch (e) {
   fail++;
   console.error('💥 冒烟异常：', e.message);

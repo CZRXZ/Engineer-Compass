@@ -9,55 +9,94 @@
 //   用户之后每次写操作继续撞 403（且不知道要重新认领）→ 本探针转红。
 //   修复后 token 被清、UI 回落访客态 → 转绿。
 //
-// 前置：后端 :3000 与 vite 开发服 :5173 均已启动
-//   终端1：cd backend && npm start
-//   终端2：cd frontend && npm run dev
-//   运行：node scripts/probe_claimlost.mjs   （或 npm run probe:claimlost）
-// 自清理：探针自建项目/名单/行/附件，跑完自删项目与测试用户，可反复运行、可并发于冒烟之后。
+// 沙盒（2026-10-16 起，与 probe_repo_ui/probe_booking_ui 同范式）：自起后端 :3111（cwd=临时目录、
+//   DB_PATH=临时库，找不到 .env）+ vite :5201，跑完 taskkill 进程树并 rmSync 临时目录。
+//   关键断言的 403 发生在认领身份校验层（rowWriteError），先于 AI 视觉调用，沙盒无视觉密钥也可测。
+//   报销上传目录 EXPENSE_ROOT 后端无 env 覆盖（仍指 backend/uploads/expense），项目 DELETE 会级联删盘，
+//   异常中断时 finally 再按本次邀请码兜底清一次自己的目录，绝不碰其他项目。
+// 运行：node scripts/probe_claimlost.mjs   （或 npm run probe:claimlost）
 import { chromium } from 'playwright';
-import { DEFAULT_API, openProbeDb } from './lib/probeDb.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const API = process.env.PROBE_API || DEFAULT_API;
-const WEB = process.env.PROBE_WEB || 'http://localhost:5173';
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const BACKEND = path.join(ROOT, 'backend');
+const PORT = 3111, VITEP = 5201;
+const API = `http://localhost:${PORT}/api`, WEB = `http://localhost:${VITEP}`;
+
+const work = mkdtempSync(path.join(os.tmpdir(), 'probe_claim_'));
+const dbPath = path.join(work, 'cl.db');
+const serverEnv = {
+  PATH: process.env.PATH,
+  SystemRoot: process.env.SystemRoot,
+  PORT: String(PORT),
+  DB_PATH: dbPath,
+};
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { cond ? (pass++, console.log(`✅ ${name}`)) : (fail++, console.log(`❌ ${name}`)); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const jsonReq = async (path, opts = {}) => {
+const jsonReq = async (p, opts = {}) => {
   const headers = { 'Content-Type': 'application/json', ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}) };
-  const res = await fetch(API + path, { headers, method: opts.method || 'GET', body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+  const res = await fetch(API + p, { headers, method: opts.method || 'GET', body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
   const data = await res.json().catch(() => ({}));
   return { res, data };
 };
-const api = async (path, opts = {}) => {
-  const { res, data } = await jsonReq(path, opts);
-  if (!res.ok) throw new Error(`${opts.method || 'GET'} ${path} → ${res.status} ${JSON.stringify(data)}`);
+const api = async (p, opts = {}) => {
+  const { res, data } = await jsonReq(p, opts);
+  if (!res.ok) throw new Error(`${opts.method || 'GET'} ${p} → ${res.status} ${JSON.stringify(data)}`);
   return data;
 };
 
-// ---------- 前置检查：两个服务都在跑 ----------
-const pre = async () => {
-  try { await fetch(API + '/health'); } catch { throw new Error(`后端 :3000 未启动 —— 先跑 cd backend && npm start`); }
-  try { await fetch(WEB, { signal: AbortSignal.timeout(3000) }); } catch { throw new Error(`前端 :5173 未启动 —— 先跑 cd frontend && npm run dev`); }
-};
+// ---- 自起沙盒服务 ----
+const children = [];
+function start(cmd, args, cwd, env) {
+  const p = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, shell: false });
+  children.push(p);
+  return p;
+}
+const beLog = [];
+const backend = start(process.execPath, [path.join(BACKEND, 'server.js')], work, serverEnv);
+backend.stdout.on('data', (b) => beLog.push(b.toString()));
+backend.stderr.on('data', (b) => beLog.push(b.toString()));
+const viteLog = [];
+const vite = start(process.execPath, [path.join(ROOT, 'frontend', 'node_modules', 'vite', 'bin', 'vite.js'),
+  '--port', String(VITEP), '--strictPort'], path.join(ROOT, 'frontend'), { VITE_API_TARGET: `http://localhost:${PORT}` });
+vite.stdout.on('data', (b) => viteLog.push(b.toString()));
+vite.stderr.on('data', (b) => viteLog.push(b.toString()));
+
+async function waitUp(url, n = 60) {
+  for (let i = 0; i < n; i++) {
+    try { if ((await fetch(url)).ok) return; } catch { /* 还没起 */ }
+    await sleep(500);
+  }
+  throw new Error(`服务未就绪：${url}`);
+}
 
 const stamp = Date.now().toString().slice(-8);
 const EMAIL = `probe_claimlost_${stamp}@test.dev`;
 const PNG_1x1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
-let browser = null, P = 0, ta = '', uid = 0;
+let browser = null, P = 0, C = '', ta = '', uid = 0;
 
 try {
-  await pre();
-  ok('前置：后端 :3000 与前端 :5173 均在运行', true);
+  await waitUp(`${API}/health`);
+  await waitUp(WEB);
+  console.log('—— 沙盒服务就绪 ——');
 
   // ---------- 夹具：owner + 项目 + 队 + 名单 + 项目级⑥零散票据行 + 图片附件 ----------
   // 用项目级 misc 行：其槽位 ticket 明确接受图片（train 的槽位偏 PDF），且成员认领后即可自理自己名下
   const ra = await api('/auth/register', { method: 'POST', body: { email: EMAIL, password: 'pass123456', nickname: '探针负责人' } });
   ta = ra.token; uid = Number(ra.user.id);
+  await api('/auth/real-name', { method: 'PUT', token: ta, body: { real_name: '探负责' } });
   const proj = await api('/expense', { method: 'POST', token: ta, body: { name: '认领失效探针', event: '电子设计大赛' } });
   P = Number(proj.id);
-  const C = proj.code;
+  C = proj.code;
   const tm = await api(`/expense/${P}/team`, { method: 'POST', token: ta, body: { name: '探针队' } });
   const mid = Number((await api(`/expense/${P}/team/${Number(tm.id)}/member`, { method: 'POST', token: ta, body: { name: '王小明' } })).id);
   const row = await api(`/expense/o/${C}/row`, {
@@ -124,18 +163,28 @@ try {
   ok('全程无未捕获的前端异常', pageErrors.length === 0);
   if (pageErrors.length) console.log(`      ↳ ${pageErrors.slice(0, 3).join(' | ')}`);
 
-  // ---------- 清理 ----------
+  // ---------- 清理（全在沙盒：业务 API 删项目级联清盘 + 临时库删测试用户）----------
   await browser.close(); browser = null;
   await api(`/expense/${P}`, { method: 'DELETE', token: ta });
-  const db = openProbeDb(API);
-  db.prepare('DELETE FROM user WHERE id = ?').run(uid);
-  db.close();
-  ok('自清理：探针项目与测试用户已删除', true);
+  new DatabaseSync(dbPath).prepare('DELETE FROM user WHERE id = ?').run(uid);
+  ok('自清理：沙盒项目与测试用户已删除', true);
 } catch (e) {
   fail++;
   console.log(`❌ 异常中断: ${e.message}`);
+  console.log('—— 后端日志尾 ——\n' + beLog.slice(-20).join(''));
+  console.log('—— vite 日志尾 ——\n' + viteLog.slice(-10).join(''));
 } finally {
   if (browser) await browser.close().catch(() => {});
+  for (const p of children) {
+    try { process.platform === 'win32' ? spawn('taskkill', ['/F', '/T', '/PID', String(p.pid)]) : p.kill('SIGKILL'); } catch { /* 已退出 */ }
+  }
+  await sleep(800);
+  // 兜底：只清本次邀请码对应的上传目录（EXPENSE_ROOT 无 env 覆盖；正常已被项目 DELETE 级联）
+  if (C) {
+    const upDir = path.join(ROOT, 'backend', 'uploads', 'expense', C);
+    if (existsSync(upDir)) rmSync(upDir, { recursive: true, force: true });
+  }
+  try { rmSync(work, { recursive: true, force: true }); } catch { /* 临时目录 */ }
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

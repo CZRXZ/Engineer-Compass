@@ -4,6 +4,7 @@
 
 ## 1. 领域与口径
 
+- **实名认证硬门禁（2026-10-16）**：资源预约、经费报销、物料采购三个模块的全部端点要求账号已在账号安全页填写真实姓名（`user.real_name`，2–20 字中英文），未实名一律 403 `{code:'need_real_name'}`，**管理员不豁免**；唯一白名单是预约模块 `POST /projects/:id/conflicts`（弹窗内实时冲突预检，不泄密）。报销的匿名邀请面 `/api/expense/o/*`（凭邀请码只读/认领/下载/导出）不挂门禁。前端 `/booking`、`/purchase` 路由 `meta.requiresRealName` 守卫先于页面挂载拦截，弹不可关闭的实名弹窗；未实名用户每人一条 `personal_notice(type=realname_required, link=/account-security)`，实名后自动已读。三模块内人员署名统一为「真名（昵称）」，由 `displayNameOf()`（后端 middleware.js，前端 utils/displayName.js 同口径）在**写库瞬间生成快照**（booker_name/owner_name/applicant_name/actor_name 等），读取端原样渲染快照，不再 JOIN 实时真名二次组合；昵称本身已含真名时（如「张玉磊（284806020）」）直接用昵称，避免叠成「张玉磊（张玉磊（284806020））」。历史快照不回溯。实时 user 对象（选人下拉、审批人、登录本人）仍按当前真名/昵称即时组合。
 - **项目（booking_project）**：登录用户可建；建档者即负责人（`created_by`），管理员管全部（同物料采购口径）。项目只关不删（无 DELETE 端点）。
 - **两类资源**：📦 **物品资源** `kind=item`（is_space=0，按数量库存池共享）；🏢 **空间资源** `kind=space`（is_space=1，同一时段独占、按容量限人数）。`is_space` 是冲突/容量/库存逻辑的唯一依据，kind 仅用于展示/分组/过滤且与 is_space 一一对应（资源创建后二者均不可变）。资源被预约引用后只能归档不能硬删（DELETE 409）。
 - **审批模式在资源级**：每个资源 `approve_mode = approval | first_come`。`first_come` 不冲突即 confirmed；`approval` 落 pending 待负责人/管理员审批。项目上的 `default_approve_mode` 只作新资源表单预填；切换不追溯历史单。
@@ -53,7 +54,7 @@ confirmed：预约者开始前可取消（已开始→400 提示联系负责人�
 - 资源编辑**下调 capacity/quantity 时对现存 BLOCKING 占用复检**，否则 409，杜绝甘特出现负容量。
 - 自审批禁令：负责人不能审自己的单（403），admin 豁免；无权对象一律 404。
 
-## 5. 端点表（/api/booking，全部需登录）
+## 5. 端点表（/api/booking，全部需登录且已实名；`POST /projects/:id/conflicts` 只需登录）
 
 | 方法/路径 | 说明 |
 |---|---|

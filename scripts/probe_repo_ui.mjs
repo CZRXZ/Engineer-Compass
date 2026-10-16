@@ -322,6 +322,35 @@ try {
   const loginOld = await jreq('/auth/login', { method: 'POST', body: { email: emailA, password: 'pass123456' } });
   ok('旧密码被拒 401', loginOld.res.status === 401, `实际 ${loginOld.res.status}`);
 
+  // ===== 8.5 账号安全页：实名认证卡（未实名 → 弹窗填写 → 已实名；公告联动已读）=====
+  const rnCard = page.locator('.ac-card', { hasText: '实名认证' }).first();
+  await rnCard.waitFor({ timeout: 8000 });
+  ok('实名卡出现且为「未实名」红标 + 三模块提示',
+    (await rnCard.innerText()).includes('未实名') && (await rnCard.innerText()).includes('物料采购需实名后才能使用'));
+  const aCntBefore = await api('/notifications/unread-count', { token: A.token });
+  ok('填写前 A 有未读实名公告', aCntBefore.notices >= 1, JSON.stringify(aCntBefore));
+  await rnCard.getByRole('button', { name: '去填写' }).click();
+  let rnDlg = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
+  await rnDlg.waitFor({ timeout: 6000 });
+  ok('账号页弹窗可关闭（有 X 与取消，区别于硬门禁）',
+    (await rnDlg.locator('.el-dialog__headerbtn:visible').count()) === 1
+    && (await rnDlg.getByRole('button', { name: '取消' }).count()) === 1);
+  await rnDlg.locator('input').fill('123');
+  await rnDlg.getByRole('button', { name: '保存并继续' }).click();
+  await sleep(200);
+  ok('纯数字姓名前端即时拦截（弹窗不关、显示错误文案）',
+    (await rnDlg.locator('.rn-err').innerText()).length > 0 && (await page.locator('.el-dialog:visible').count()) >= 1);
+  await rnDlg.locator('input').fill('探针实名');
+  const rnPut = page.waitForResponse((r) => r.url().includes('/auth/real-name') && r.request().method() === 'PUT', { timeout: 8000 });
+  await rnDlg.getByRole('button', { name: '保存并继续' }).click();
+  await rnPut;
+  await sleep(400);
+  ok('保存后弹窗关闭，卡片变「已实名」并显示真名',
+    (await page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' }).count()) === 0
+    && (await rnCard.innerText()).includes('已实名') && (await rnCard.innerText()).includes('探针实名'));
+  const aCntAfter = await api('/notifications/unread-count', { token: A.token });
+  ok('实名后 A 的实名公告自动已读（notices=0）', aCntAfter.notices === 0, JSON.stringify(aCntAfter));
+
   // ===== 9. 登录页「忘记密码」公开重置流（B 账号，未登录）=====
   await logout();
   await page.goto(WEB + '/login');
@@ -344,7 +373,9 @@ try {
   // ===== 10. 后台：密码状态列 + 一键提醒（先已读 → 补发 1 条；验证去重/计数）=====
   // C 的未读公告先标已读，提醒才会补发（后端对未读同 type 去重）
   const cNotices1 = await api('/notifications/personal', { token: C.token });
-  await api(`/notifications/personal/${cNotices1.rows[0].id}/read`, { method: 'POST', token: C.token });
+  // C 现有两类公告（初始密码 + 实名提醒）：只把改密公告标已读，补发断言才精确
+  const pwRow = cNotices1.rows.find((r) => r.type === 'password_init');
+  await api(`/notifications/personal/${pwRow.id}/read`, { method: 'POST', token: C.token });
   const db2 = new DatabaseSync(dbPath);
   db2.exec('PRAGMA busy_timeout=5000');
   db2.prepare('UPDATE user SET is_admin = 1 WHERE id = ?').run(A.user.id);
@@ -378,6 +409,33 @@ try {
     Number(noticeBadge) >= 1
     && (await page.locator('body').innerText()).includes('请尽快修改初始密码'),
     `badge=${noticeBadge}`);
+
+  // ===== 11.5 实名硬门禁：未实名 B 进 /booking 被不可关弹窗拦截，填名后放行 =====
+  // 用站内点击触发导航（硬加载 /booking 时取消「初始导航」地址栏不回退，是 vue-router 正常行为；
+  // 站内导航 return false 才体现「URL 停在原页」契约）
+  await authAs({ token: loginReset.data.token, user: loginReset.data.user });
+  await page.locator('a[href="/booking"]').first().click();
+  await sleep(500);
+  ok('门禁拦截后 URL 停在原页（导航取消）', curUrl() === '/', curUrl());
+  const gate = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
+  await gate.waitFor({ timeout: 8000 });
+  ok('硬门禁弹窗：无 X、无取消、遮罩/ESC 不关，只能实名',
+    (await gate.locator('.el-dialog__headerbtn:visible').count()) === 0
+    && (await gate.getByRole('button', { name: '取消' }).count()) === 0
+    && (await gate.getByRole('button', { name: '保存并继续' }).count()) === 1);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  ok('ESC 后弹窗仍在', (await page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' }).count()) === 1);
+  await gate.locator('input').fill('路乙实名');
+  const enterP = page.waitForResponse((r) => r.url().includes('/booking/projects') && r.request().method() === 'GET' && r.status() === 200, { timeout: 10000 });
+  await gate.getByRole('button', { name: '保存并继续' }).click();
+  await page.waitForURL('**/booking', { timeout: 10000 });
+  await enterP;
+  ok('实名保存后自动跳转到 /booking 且预约列表 200', curUrl() === '/booking', curUrl());
+  // el-dialog 离场有 ~300ms 过渡，立即数 :visible 会误判；等它真正隐藏
+  const gateDlg = page.locator('.el-dialog', { hasText: '请先完成实名认证' });
+  await gateDlg.waitFor({ state: 'hidden', timeout: 3000 });
+  ok('门禁弹窗已消失', await gateDlg.isHidden());
 
   // ===== 12. 390px 窄屏：项目页 / 大厅无横向溢出 =====
   await page.setViewportSize({ width: 390, height: 844 });

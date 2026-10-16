@@ -3,10 +3,19 @@ import { ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import ToolDock from './components/ToolDock.vue';
 import ImageViewer from './components/ImageViewer.vue';
+import RealNameDialog from './components/account/RealNameDialog.vue';
 import auth from './auth.js';
 import { api } from './api.js';
+import { realNameGate, closeGate } from './realNameGate.js';
 
 const router = useRouter();
+
+// 实名门禁：填名成功后放行到被拦时想去的路由（无目标则仅关弹窗）
+function onRealNameDone() {
+  const to = realNameGate.pendingTo;
+  closeGate();
+  if (to && router.currentRoute.value.fullPath !== to) router.push(to);
+}
 
 // 全局公告横幅：最新置顶公告（公开接口，无需登录；关闭仅本次会话记忆）
 const announce = ref(null);
@@ -74,6 +83,8 @@ onMounted(() => applyGhostClass(auth.user?.is_ghost));
     <router-view />
     <ToolDock />
     <ImageViewer />
+    <!-- 实名硬门禁全局弹窗（不可关闭；账号安全页另有自己的可关闭实例） -->
+    <RealNameDialog :model-value="realNameGate.open" @done="onRealNameDone" />
   </div>
 </template>
 

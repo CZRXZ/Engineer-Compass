@@ -1,4 +1,6 @@
 // 后端 API 封装（开发环境经 Vite 代理到 :3000）
+import { openGate } from './realNameGate.js';
+
 const BASE = '/api';
 
 async function req(path, opts = {}, timeoutMs = 30000) {
@@ -18,6 +20,8 @@ async function req(path, opts = {}, timeoutMs = 30000) {
       err.hint = data.hint || '';
       err.status = res.status;
       err.data = data; // 预约冲突明细等结构化字段（data.conflicts）
+      // 三模块实名硬门禁：任何请求收到 need_real_name 都弹全局不可关弹窗（通知深链等兜底入口）
+      if (res.status === 403 && data.code === 'need_real_name') openGate();
       throw err;
     }
     return data;
@@ -101,6 +105,8 @@ export const api = {
   changePassword: (card) => req('/auth/change-password', { method: 'POST', body: JSON.stringify(card) }),
   resetPassword: (card) => req('/auth/reset-password', { method: 'POST', body: JSON.stringify(card) }),
   setPhone: (phone) => req('/auth/phone', { method: 'PUT', body: JSON.stringify({ phone }) }),
+  // 实名认证（设置/修改真实姓名，无审核；成功返回最新 user）
+  setRealName: (real_name) => req('/auth/real-name', { method: 'PUT', body: JSON.stringify({ real_name }) }),
   feedback: (card) => req('/feedback', { method: 'POST', body: JSON.stringify(card) }),
   // 公开主页（只读）：基本资料 + 竞赛计划 + 学习日程 + 参加的小组
   userPublic: (id) => req(`/users/${id}/public`),
@@ -286,6 +292,8 @@ export const api = {
   adminCommentDelete: (id) => req(`/admin/comments/${id}`, { method: 'DELETE' }),
   // 给所有仍用初始密码的用户补发个人公告（已有未读提醒的不重复发）
   adminPasswordRemind: () => req('/admin/notices/password-remind', { method: 'POST' }),
+  // 给所有未实名用户补发实名提醒公告（已有同类型未读公告的不重复发）
+  adminRealnameRemind: () => req('/admin/notices/realname-remind', { method: 'POST' }),
   // 用户详情 + 角色管理
   adminUserDetail: (id) => req(`/admin/users/${id}/detail`),
   adminSetRole: (id, is_admin) => req(`/admin/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ is_admin: is_admin ? 1 : 0 }) }),

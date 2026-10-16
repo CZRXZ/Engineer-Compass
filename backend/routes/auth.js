@@ -33,6 +33,31 @@ function clearPasswordInitNotice(userId) {
   ).run(userId);
 }
 
+// 个人公告：实名认证提醒（建号即发；NOT EXISTS 防御重复；预约/报销/采购三模块硬门禁）
+export function realNameRequiredNotice(userId) {
+  db.prepare(
+    `INSERT INTO personal_notice (user_id, type, title, content, link)
+       SELECT ?, 'realname_required', ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM personal_notice WHERE user_id = ? AND type = 'realname_required' AND is_read = 0
+       )`
+  ).run(
+    userId,
+    '【重要】请完成实名认证',
+    '资源预约、经费报销、物料采购需填写真实姓名后才能使用，请在账号安全页完成实名认证。',
+    '/account-security',
+    userId
+  );
+}
+
+// 实名成功后：实名提醒自动已读
+function clearRealNameNotice(userId) {
+  db.prepare(
+    `UPDATE personal_notice SET is_read = 1, read_time = datetime('now','localtime')
+     WHERE user_id = ? AND type = 'realname_required' AND is_read = 0`
+  ).run(userId);
+}
+
 // 顶层保留名：动态路由 /:username/:slug 不能与站内静态路由相撞
 const RESERVED_USERNAMES = new Set([
   'share', 'me', 'user', 'users', 'admin', 'admin-console', 'login', 'api', 'schedule', 'study',
@@ -63,7 +88,7 @@ function genUsername(mail) {
 export const userCard = (u) => ({
   id: u.id, username: u.username, nickname: u.nickname, is_admin: !!u.is_admin, is_ghost: !!u.is_ghost,
   email: u.email || '', avatar: u.avatar || null,
-  password_set: u.password_set !== 0, phone: u.phone || '',
+  password_set: u.password_set !== 0, phone: u.phone || '', real_name: u.real_name || '',
 });
 
 // POST /api/auth/send-code — 发送邮箱验证码（注册/登录共用；未注册邮箱登录时自动注册）
@@ -128,6 +153,7 @@ r.post('/email-login', async (req, res) => {
       .run(name, hashPassword(INITIAL_PASSWORD), mail.split('@')[0], mail);
     user = { id: rr.lastInsertRowid, username: name, nickname: mail.split('@')[0], is_admin: 0, email: mail, avatar: null, password_set: 0 };
     try { passwordInitNotice(user.id); } catch { /* 通知失败不挡登录 */ }
+    try { realNameRequiredNotice(user.id); } catch { /* 同上 */ }
     // 把本机匿名数据接管到该账号：'local' 备赛计划 + 匿名学习日程 + 匿名日程笔记
     // 笔记按 (user_id, note_date) 唯一，账号已有同日笔记的 'local' 行保留（仍可通过列表查询看到）
     migrated += db.prepare("UPDATE user_schedule SET user_id = ? WHERE user_id = 'local'").run(user.id).changes;
@@ -167,6 +193,7 @@ r.post('/register', (req, res) => {
   req.user = { id: r2.lastInsertRowid, username: name };
   logAudit(req, 'register', mail);
   const nu = db.prepare('SELECT * FROM user WHERE id = ?').get(r2.lastInsertRowid);
+  try { realNameRequiredNotice(nu.id); } catch { /* 通知失败不挡注册 */ }
   res.status(201).json({ token, user: userCard(nu) });
 });
 
@@ -250,6 +277,27 @@ r.put('/phone', authRequired, (req, res) => {
   db.prepare('UPDATE user SET phone = ?, phone_verified = 0 WHERE id = ?').run(phone, req.user.id);
   const u = db.prepare('SELECT * FROM user WHERE id = ?').get(req.user.id);
   res.json({ message: phone ? '手机号已保存（暂未验证）' : '已解绑手机号', user: userCard(u) });
+});
+
+// PUT /api/auth/real-name — 设置/修改真实姓名（本接口自身绝不挂 realNameRequired，否则死锁）
+// 2-20 字（按码点计），首尾须为汉字或字母，中间允许空格/间隔号·•/点；拒绝纯数字、纯符号、单字、emoji
+const REALNAME_RE = /^[一-龥A-Za-z][一-龥A-Za-z·•.\s]{0,18}[一-龥A-Za-z.]$/;
+r.put('/real-name', authRequired, (req, res) => {
+  const name = String(req.body?.real_name ?? '').trim().replace(/\s+/g, ' ');
+  const len = Array.from(name).length;
+  if (len < 2 || len > 20) return res.status(400).json({ error: '姓名长度需为 2-20 个字符' });
+  if (!REALNAME_RE.test(name)) return res.status(400).json({ error: '姓名仅支持汉字、英文字母、空格和间隔号（·）' });
+  if ((name.match(/[一-龥A-Za-z]/g) || []).length < 2) {
+    return res.status(400).json({ error: '姓名不能为纯数字、纯符号或单字' });
+  }
+  const me = db.prepare('SELECT real_name FROM user WHERE id = ?').get(req.user.id);
+  const oldName = me?.real_name || '';
+  db.prepare('UPDATE user SET real_name = ? WHERE id = ?').run(name, req.user.id);
+  clearRealNameNotice(req.user.id);
+  if (oldName) logAudit(req, 'realname-change', name, { old: oldName });
+  else logAudit(req, 'realname-set', name);
+  const u = db.prepare('SELECT * FROM user WHERE id = ?').get(req.user.id);
+  res.json({ message: '实名认证信息已保存', user: userCard(u) });
 });
 
 // POST /api/auth/logout — 登出（删除当前会话 + 审计）

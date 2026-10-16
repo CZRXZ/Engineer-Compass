@@ -70,18 +70,18 @@
             :label="`👥 ${t.name}（${t.members.length} 名队员）`" />
         </el-select>
         <div v-if="selectedTeam" class="bd-chips">
-          <el-tag size="small" type="success">{{ auth.user?.nickname }}（队长）</el-tag>
-          <el-tag v-for="m in selectedTeam.members" :key="m.user_id" size="small">{{ m.user_name }}</el-tag>
+          <el-tag size="small" type="success">{{ displayName(auth.user) }}（队长）</el-tag>
+          <el-tag v-for="m in selectedTeam.members" :key="m.user_id" size="small">{{ displayName(m) }}</el-tag>
         </div>
       </el-form-item>
       <el-form-item v-if="f.source === 'multi' && f.multiKind === 'custom'" label="临时选择参与人（全站搜索）">
         <el-select v-model="f.participant_ids" multiple filterable remote :remote-method="searchUser"
           :loading="searching" :reserve-keyword="false" style="width: 100%" placeholder="搜索用户名或昵称添加">
           <el-option v-for="u in userOptions" :key="u.id" :value="u.id"
-            :label="`${u.nickname || u.username}（@${u.username}）`" />
+            :label="`${displayName(u)}（@${u.username}）`" />
         </el-select>
         <div class="bd-chips">
-          <el-tag size="small" type="success" closable>{{ auth.user?.nickname }}（我，自动计入）</el-tag>
+          <el-tag size="small" type="success" closable>{{ displayName(auth.user) }}（我，自动计入）</el-tag>
         </div>
       </el-form-item>
 
@@ -106,6 +106,7 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import auth from '../../auth.js';
 import { api } from '../../api.js';
+import { displayName } from '../../utils/displayName.js';
 import { MODE_ZH, timeOptions, fmtDate, durationLabel } from '../../utils/booking.js';
 
 const props = defineProps({

@@ -25,6 +25,14 @@ try {
   const ta = ra.token, tb = rb.token;
   const uidA = Number(ra.user.id);
 
+  // 建号即发实名公告；实名后公告自动已读（通知/分享模块本身不挂实名门禁）
+  let c0 = await api('/notifications/unread-count', { token: ta });
+  ok('建号即有 1 条实名公告未读', c0.notices === 1 && c0.total === 1, c0);
+  await api('/auth/real-name', { method: 'PUT', token: ta, body: { real_name: '通知甲名' } });
+  await api('/auth/real-name', { method: 'PUT', token: tb, body: { real_name: '通知乙名' } });
+  c0 = await api('/notifications/unread-count', { token: ta });
+  ok('实名后公告清零', c0.notices === 0 && c0.total === 0, c0);
+
   // A 发两帖
   const p1 = await api('/share/posts', { method: 'POST', token: ta, body: { title: '通知测试帖一', content: '正文一' } });
   const p2 = await api('/share/posts', { method: 'POST', token: ta, body: { title: '通知测试帖二', content: '正文二' } });

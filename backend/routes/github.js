@@ -5,7 +5,7 @@ import { Router } from 'express';
 import { randomBytes } from 'node:crypto';
 import db from '../db/database.js';
 import { authRequired, logAudit, hashPassword } from './middleware.js';
-import { userCard, uniqueUsername } from './auth.js';
+import { userCard, uniqueUsername, realNameRequiredNotice } from './auth.js';
 import {
   configured, clientId, webOrigin, exchangeCode, fetchGithubUser, fetchGithubEmails,
 } from '../lib/githubClient.js';
@@ -83,7 +83,9 @@ function createGithubUser(gh, email) {
   const info = db.prepare(
     'INSERT INTO user (username, password_hash, nickname, email, avatar, password_set) VALUES (?,?,?,?,?,1)'
   ).run(username, hashPassword(secret), nickname, email || null, gh.avatar_url || null);
-  return db.prepare('SELECT * FROM user WHERE id = ?').get(info.lastInsertRowid);
+  const u = db.prepare('SELECT * FROM user WHERE id = ?').get(info.lastInsertRowid);
+  try { realNameRequiredNotice(u.id); } catch { /* 通知失败不挡登录 */ }
+  return u;
 }
 
 function isConstraint(e) {

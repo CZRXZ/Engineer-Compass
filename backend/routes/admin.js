@@ -15,7 +15,7 @@ r.use(adminRequired);
 const safeUser = (u) => u && ({
   id: u.id, username: u.username, nickname: u.nickname, is_admin: !!u.is_admin,
   email: u.email || '', avatar: u.avatar || null, status: u.status || 0, create_time: u.create_time || null,
-  password_set: u.password_set !== 0, phone: u.phone || '',
+  password_set: u.password_set !== 0, phone: u.phone || '', real_name: u.real_name || '',
 });
 
 const PASSWORD_NOTICE = {
@@ -29,12 +29,12 @@ r.get('/users', (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const size = Math.min(100, Math.max(1, Number(req.query.size) || 20));
   const q = String(req.query.q || '').trim();
-  const where = q ? 'WHERE nickname LIKE ? OR email LIKE ? OR username LIKE ?' : '';
+  const where = q ? 'WHERE nickname LIKE ? OR email LIKE ? OR username LIKE ? OR real_name LIKE ?' : '';
   const like = `%${q}%`;
-  const params = q ? [like, like, like] : [];
+  const params = q ? [like, like, like, like] : [];
   const total = db.prepare(`SELECT COUNT(*) AS n FROM user ${where}`).get(...params).n;
   const list = db.prepare(
-    `SELECT id, username, nickname, is_admin, email, avatar, status, password_set, phone, create_time
+    `SELECT id, username, nickname, is_admin, email, avatar, status, password_set, phone, real_name, create_time
      FROM user ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
   ).all(...params, size, (page - 1) * size).map(safeUser);
   res.json({ total, page, size, list });
@@ -95,6 +95,29 @@ r.post('/notices/password-remind', (req, res) => {
   }
   logAudit(req, 'password-remind', `${sent}/${targets.length}`, { total: targets.length });
   res.json({ sent, total: targets.length, message: `已向 ${sent} 位未改密用户补发提醒（共 ${targets.length} 位待修改）` });
+});
+
+// POST /api/admin/notices/realname-remind — 给所有未实名用户补发实名个人公告
+// （已有同 type 未读公告的不重复发），返回新发送数；管理员自身未实名也在目标集内（门禁不豁免管理员）
+const REALNAME_NOTICE = {
+  title: '【重要】请完成实名认证',
+  content: '资源预约、经费报销、物料采购需填写真实姓名后才能使用，请在账号安全页完成实名认证。',
+  link: '/account-security',
+};
+r.post('/notices/realname-remind', (req, res) => {
+  const targets = db.prepare("SELECT id FROM user WHERE COALESCE(real_name, '') = ''").all();
+  const exists = db.prepare(
+    "SELECT 1 FROM personal_notice WHERE user_id = ? AND type = 'realname_required' AND is_read = 0"
+  );
+  const ins = db.prepare('INSERT INTO personal_notice (user_id, type, title, content, link) VALUES (?, \'realname_required\', ?, ?, ?)');
+  let sent = 0;
+  for (const u of targets) {
+    if (exists.get(u.id)) continue;
+    ins.run(u.id, REALNAME_NOTICE.title, REALNAME_NOTICE.content, REALNAME_NOTICE.link);
+    sent += 1;
+  }
+  logAudit(req, 'realname-remind', `${sent}/${targets.length}`, { total: targets.length });
+  res.json({ sent, total: targets.length, message: `已向 ${sent} 位未实名用户补发提醒（共 ${targets.length} 位待实名）` });
 });
 
 r.get('/announcements', (req, res) => {

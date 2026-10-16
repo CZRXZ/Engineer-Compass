@@ -12,13 +12,17 @@
 // zip(含 team_id=0 全项目/06零散票据)/xlsx(=SUM 六列/注入转义/全项目统一支付独立 sheet) → 四级删除级联清盘
 // → 清理测试用户（openProbeDb（lib/probeDb.mjs，库须与 BASE 同源）+ fs.rmSync 自清理，process.exit(fail?1:0)）
 import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 // 视觉白名单真相源：直接引服务端同一模块（不抄一份，避免与其漂移）；只读常量，不触网不读 .env
 import { visionFieldList, VISION_EXTRA_KEYS } from '../backend/lib/vision.js';
 import { DEFAULT_API, openProbeDb } from './lib/probeDb.mjs';
 
 const BASE = process.env.PROBE_API || DEFAULT_API;
-const UP = 'D:\\desktop\\竞赛指导\\backend\\uploads\\expense';
+// 与后端 routes/expense.js EXPENSE_ROOT 默认值同源（仓库搬移后旧硬编码路径已失效；可用 SMK_EXPENSE_DIR 覆盖）
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const UP = process.env.SMK_EXPENSE_DIR || join(__dirname, '..', 'backend', 'uploads', 'expense');
 
 const jsonReq = async (path, opts = {}) => {
   const headers = { 'Content-Type': 'application/json', ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}), ...(opts.headers || {}) };
@@ -82,6 +86,15 @@ try {
   ok('注册两用户', ra.token && rb.token);
   const ta = ra.token, tb = rb.token;
   const uidA = Number(ra.user.id), uidB = Number(rb.user.id);
+
+  // 实名硬门禁：负责人侧（/expense/*）未实名 403；匿名邀请面 /o/* 不挂载门禁（后面照常 200）
+  let gotRn = await expect('/expense', 403, { token: tb });
+  ok('未实名 GET 负责人项目列表 403 need_real_name', gotRn.ok && gotRn.data.code === 'need_real_name', gotRn.data);
+  gotRn = await expect('/expense', 403, { method: 'POST', token: tb, body: { name: '偷建' } });
+  ok('未实名建报销项目 403 need_real_name', gotRn.ok && gotRn.data.code === 'need_real_name', gotRn.data);
+  await api('/auth/real-name', { method: 'PUT', token: ta, body: { real_name: '周管' } });
+  await api('/auth/real-name', { method: 'PUT', token: tb, body: { real_name: '吴关' } });
+  ok('两人实名后负责人侧可用', (await expect('/expense', 200, { token: tb })).ok);
 
   // ---------- 1. owner 建项目 / 列表 ----------
   let got = await expect('/expense', 401, { method: 'POST', body: { name: '冒烟报销' } });

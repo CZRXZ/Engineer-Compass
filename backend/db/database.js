@@ -44,6 +44,7 @@ migCol('user', 'phone', "ALTER TABLE user ADD COLUMN phone TEXT DEFAULT ''");   
 migCol('user', 'phone_verified', 'ALTER TABLE user ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0'); // 预留：SMS 验证
 migCol('share_post', 'slug', "ALTER TABLE share_post ADD COLUMN slug TEXT DEFAULT ''");                // GitHub 风路径名
 migCol('share_post', 'is_public', 'ALTER TABLE share_post ADD COLUMN is_public INTEGER NOT NULL DEFAULT 1'); // 1=开源
+migCol('user', 'real_name', "ALTER TABLE user ADD COLUMN real_name TEXT NOT NULL DEFAULT ''");         // 真实姓名（三模块实名门禁）
 
 // ---- user_version 闸门：只对「升级前的老库」执行一次的存量数据回填 ----
 // 新库（schema 直接建成新结构、零行）同样过一遍但 0 行受影响，随即落版本号。
@@ -94,6 +95,31 @@ if (userVer < 2) {
   }
   db.exec('PRAGMA user_version = 2;');
   userVer = 2;
+}
+
+if (userVer < 3) {
+  // 强制实名：给所有未实名（real_name=''）用户补发一条 personal_notice（铃铛自动计入）。
+  // user_version 闸门保证整段只执行一次；NOT EXISTS 仅作防御性幂等。
+  const missing = db.prepare("SELECT id FROM user WHERE COALESCE(real_name, '') = ''").all();
+  const insRealNameNotice = db.prepare(
+    `INSERT INTO personal_notice (user_id, type, title, content, link)
+       SELECT ?, 'realname_required', ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM personal_notice WHERE user_id = ? AND type = 'realname_required' AND is_read = 0
+       )`
+  );
+  for (const u of missing) {
+    insRealNameNotice.run(
+      u.id,
+      '【重要】请完成实名认证',
+      '资源预约、经费报销、物料采购需填写真实姓名后才能使用，请在账号安全页完成实名认证。',
+      '/account-security',
+      u.id
+    );
+  }
+  db.exec('PRAGMA user_version = 3;');
+  userVer = 3;
+  if (missing.length) console.log(`🪪 实名提醒公告补发完成：${missing.length} 位未实名用户已收到个人公告`);
 }
 
 // 兜底：任何漏网的空 slug（正常不会有——发帖即生成；迁移后从备份恢复等边缘情况自愈）

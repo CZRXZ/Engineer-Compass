@@ -18,6 +18,8 @@
           <div v-if="b.purpose"><dt>用途</dt><dd>{{ b.purpose }}</dd></div>
           <div v-if="b.status === 'rejected' && b.reject_reason"><dt>驳回理由</dt><dd class="bd-reject">{{ b.reject_reason }}</dd></div>
           <div v-if="b.approver_name"><dt>审批</dt><dd>{{ b.approver_name }} · {{ b.approve_time }}</dd></div>
+          <div v-if="b.status === 'canceled' && b.cancel_by_name"><dt>取消人</dt>
+            <dd>{{ b.cancel_by_name }} · {{ b.cancel_time }}</dd></div>
         </dl>
 
         <!-- 参与人头像组 -->

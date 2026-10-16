@@ -9,6 +9,7 @@ import { reactive, ref, computed, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '../../api.js';
 import auth from '../../auth.js'; // 负责人本人显示名（全项目统一支付可填"负责人本人"）
+import { displayName } from '../../utils/displayName.js';
 import { FIELDS, SLOTS, CATEGORIES } from '../../utils/expenseMeta.js';
 
 const props = defineProps({
@@ -40,8 +41,8 @@ const roster = computed(() => (props.members || []).filter((m) => m.team_id === 
 // 范围不必全体：可勾选子集（跨队可）或留空 —— 详见下方 pay-zone 项目级分支
 const isProjPay = computed(() => props.mode === 'create' ? Number(props.teamId) === 0
   : !!(props.row && props.row.team_id == null));
-// 负责人本人显示名（服务端比对 username/nickname 同名即可，跨队名单外的兜底出钱人）
-const selfName = () => String(auth.user?.nickname || auth.user?.username || '').trim();
+// 负责人本人显示名：真名（昵称）；服务端对真名/昵称/用户名/组合名任一命中均视为本人（跨队名单外的兜底出钱人）
+const selfName = () => displayName(auth.user);
 
 // —— 统一支付/项目级记录（2026-09-03）：一人垫付多人/全队/整个项目的一笔费用；⑥零散票据=一张
 //    可能含多人/跨队成员的票据文件（该类别仅项目级区可选，队行服务端 400 兜底）——

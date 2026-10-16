@@ -26,6 +26,7 @@ import AdminView from './components/AdminView.vue';
 import AdminConsole from './components/AdminConsole.vue';
 import auth, { patchUser } from './auth.js';
 import { api } from './api.js';
+import { openGate } from './realNameGate.js';
 
 // 幽灵页守卫（/ghost-share 与 /ghost-share/:id 共用）：仅 is_ghost 可进，前端守卫 + 后端 share 过滤双重校验
 async function ghostGuard(to, _from, next) {
@@ -83,11 +84,11 @@ const router = createRouter({
     { path: '/expense', name: 'expense', component: ExpenseView },
     // 报销整理使用教程（静态文档页，任何人可看）
     { path: '/expense/guide', name: 'expense-guide', component: ExpenseGuide },
-    // 物料采购：学生申请/负责人·老师按档案审批/发票上传（登录制）
-    { path: '/purchase', name: 'purchase', component: PurchaseView },
-    // 资源预约：大厅 + 项目页（周视图甘特/资源台账/固定组队/预约审批）；必须在 /:username 兜底之前
-    { path: '/booking', name: 'booking', component: BookingView },
-    { path: '/booking/:id', name: 'booking-project', component: BookingProjectView },
+    // 物料采购：学生申请/负责人·老师按档案审批/发票上传（登录制；实名硬门禁）
+    { path: '/purchase', name: 'purchase', component: PurchaseView, meta: { requiresRealName: true } },
+    // 资源预约：大厅 + 项目页（周视图甘特/资源台账/固定组队/预约审批）；必须在 /:username 兜底之前；实名硬门禁
+    { path: '/booking', name: 'booking', component: BookingView, meta: { requiresRealName: true } },
+    { path: '/booking/:id', name: 'booking-project', component: BookingProjectView, meta: { requiresRealName: true } },
     // 荣誉墙（公开免登录；内容由管理员在后台维护。复数路径只做重定向，全站单数口径）
     { path: '/honor', name: 'honor', component: HonorView },
     { path: '/honors', redirect: '/honor' },
@@ -144,10 +145,28 @@ const router = createRouter({
 });
 
 // 离开每条路由前记下滚动位置（beforeEach 时 DOM 还没换，scrollY 仍是上一页的）；
-// Map 有界：满了就丢最早的，防长会话无界增长
-router.beforeEach((_to, from) => {
+// Map 有界：满了就丢最早的，防长会话无界增长。
+// 实名硬门禁：booking/purchase 进页面前先查 real_name；老缓存没这个键时强制 me() 补刷，
+// 仍未实名 → 打开不可关弹窗并中止导航（expense 不加：?code= 匿名邀请链路要保持开放，负责人侧由 API 403 兜底）。
+router.beforeEach(async (to, from) => {
   scrollMemo.set(from.fullPath, window.scrollY);
   if (scrollMemo.size > 100) scrollMemo.delete(scrollMemo.keys().next().value);
+
+  if (to.meta.requiresRealName && auth.token) {
+    let user = auth.user;
+    if (!user || !('real_name' in user)) {
+      try {
+        const r = await api.me();
+        patchUser(r.user);
+        user = r.user;
+      } catch { user = auth.user; }
+    }
+    if (!user?.real_name) {
+      openGate(to.fullPath);
+      return false;
+    }
+  }
+  return true;
 });
 
 export default router;

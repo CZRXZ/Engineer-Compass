@@ -9,7 +9,7 @@ import multer from 'multer';
 import { mkdirSync, existsSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import db from '../db/database.js';
-import { authRequired, logAudit } from './middleware.js';
+import { authRequired, logAudit, realNameRequired, displayNameOf } from './middleware.js';
 import { callDeepSeek } from './ai.js';
 import {
   dirs, MAX_FILE, REQUEST_QUOTA,
@@ -25,6 +25,7 @@ import { buildPurchaseWorkbook } from '../lib/purchaseExcel.js';
 
 const r = Router();
 r.use(authRequired);
+r.use(realNameRequired);                       // 实名硬门禁：未实名整个采购模块不可用（管理员不豁免）
 
 const KINDS = new Set(['比赛', '项目']);
 const EDITABLE = new Set(['pending', 'rejected']);
@@ -111,13 +112,19 @@ function detailOf(rqId, req) {
   const shotByItem = new Map();
   for (const f of shots) if (!shotByItem.has(f.item_id)) shotByItem.set(f.item_id, f);
   const invoices = db.prepare("SELECT * FROM purchase_file WHERE request_id = ? AND kind = 'invoice' ORDER BY id").all(rq.id);
-  const logs = db.prepare('SELECT * FROM purchase_approval_log WHERE request_id = ? ORDER BY id').all(rq.id);
+  // applicant_name/approver_name/log.approver_name 都是落库署名快照（displayNameOf 文本），原样返回
+  const logs = db.prepare(
+    `SELECT l.* FROM purchase_approval_log l
+      WHERE l.request_id = ? ORDER BY l.id`
+  ).all(rq.id);
   const owner = rq.user_id === req.user.id;
   return {
     id: rq.id, event_id: rq.event_id, event_name: ev.name, kind: ev.kind,
-    user_id: rq.user_id, applicant_name: rq.applicant_name, remark: rq.remark || '',
+    user_id: rq.user_id, applicant_name: rq.applicant_name,
+    remark: rq.remark || '',
     status: rq.status, amount: rq.amount,
-    approver_id: rq.approver_id, approver_name: rq.approver_name || '', approver_role: rq.approver_role || '',
+    approver_id: rq.approver_id, approver_name: rq.approver_name || '',
+    approver_role: rq.approver_role || '',
     approve_time: rq.approve_time, reject_reason: rq.reject_reason || '', invoice_count: rq.invoice_count,
     submit_time: rq.submit_time, create_time: rq.create_time, update_time: rq.update_time,
     items: items.map((it) => ({
@@ -126,7 +133,8 @@ function detailOf(rqId, req) {
     })),
     invoices: invoices.map(fileOut),
     logs: logs.map((l) => ({
-      id: l.id, approver_name: l.approver_name, role: l.role, result: l.result,
+      id: l.id, approver_name: l.approver_name,
+      role: l.role, result: l.result,
       comment: l.comment || '', create_time: l.create_time,
     })),
     perm: {
@@ -200,15 +208,15 @@ r.get('/events/:id/approvers', (req, res) => {
   if (!ev) throw new HttpError(404, '比赛/项目不存在');
   if (!canApproveEvent(req, ev) && !canManageSettings(req, ev)) throw new HttpError(403, '无权查看审批人');
   const rows = db.prepare(
-    `SELECT a.user_id, a.role, a.create_time, u.username, u.nickname, u.avatar, e.created_by
+    `SELECT a.user_id, a.role, a.create_time, u.username, u.nickname, u.real_name, u.avatar, e.created_by
        FROM purchase_event_approver a JOIN user u ON u.id = a.user_id
        JOIN purchase_event e ON e.id = a.event_id
       WHERE a.event_id = ? ORDER BY a.role DESC, a.user_id`
   ).all(ev.id);
   res.json({
     approvers: rows.map((x) => ({
-      user_id: x.user_id, username: x.username, nickname: x.nickname, avatar: x.avatar,
-      role: x.role, is_creator: x.created_by === x.user_id, create_time: x.create_time,
+      user_id: x.user_id, username: x.username, nickname: x.nickname, real_name: x.real_name || '',
+      avatar: x.avatar, role: x.role, is_creator: x.created_by === x.user_id, create_time: x.create_time,
     })),
   });
 });
@@ -293,9 +301,9 @@ r.get('/users/search', (req, res) => {
   const eventId = Number(req.query.event_id);
   const like = `%${q}%`;
   let rows = db.prepare(
-    `SELECT id, username, nickname, avatar FROM user
-     WHERE id != ? AND status != 1 AND (username LIKE ? OR nickname LIKE ?) ORDER BY id LIMIT 10`
-  ).all(req.user.id, like, like);
+    `SELECT id, username, nickname, real_name, avatar FROM user
+     WHERE id != ? AND status != 1 AND (username LIKE ? OR nickname LIKE ? OR real_name LIKE ?) ORDER BY id LIMIT 10`
+  ).all(req.user.id, like, like, like);
   if (eventId) {
     const have = new Set(
       db.prepare('SELECT user_id FROM purchase_event_approver WHERE event_id = ?').all(eventId).map((x) => x.user_id)
@@ -377,6 +385,7 @@ function listFilter(req) {
 // GET /requests
 r.get('/requests', (req, res) => {
   const { where, params } = listFilter(req);
+  // applicant_name/approver_name 为落库署名快照，无需再 JOIN user 取名
   const rows = db.prepare(
     `SELECT rq.*, e.name AS event_name, e.kind AS kind,
             (SELECT COUNT(*) FROM purchase_item it WHERE it.request_id = rq.id) AS item_count
@@ -387,8 +396,10 @@ r.get('/requests', (req, res) => {
   res.json({
     requests: rows.map((x) => ({
       id: x.id, event_id: x.event_id, event_name: x.event_name, kind: x.kind,
-      user_id: x.user_id, applicant_name: x.applicant_name, remark: x.remark || '',
-      status: x.status, amount: x.amount, approver_name: x.approver_name || '', approver_role: x.approver_role || '',
+      user_id: x.user_id, applicant_name: x.applicant_name,
+      remark: x.remark || '',
+      status: x.status, amount: x.amount, approver_name: x.approver_name || '',
+      approver_role: x.approver_role || '',
       reject_reason: x.reject_reason || '', invoice_count: x.invoice_count, item_count: x.item_count,
       submit_time: x.submit_time, update_time: x.update_time,
     })),
@@ -403,7 +414,7 @@ r.post('/requests', ah((req, res) => {
   const items = normItems(req.body?.items);
   const remark = String(req.body?.remark ?? '').trim().slice(0, 300);
   const amount = sumAmount(items);
-  const name = req.user.nickname || req.user.username;
+  const name = displayNameOf(req.user);
   let id;
   db.exec('BEGIN');
   try {
@@ -494,7 +505,7 @@ function adjudicate(req, res, result, comment) {
   if (rq.user_id === req.user.id && !req.user.is_admin) throw new HttpError(403, '不能审批自己提交的申请');
   if (rq.status !== 'pending') throw new HttpError(400, '该申请已审批过了');
   const role = req.user.is_admin && !approverRow(ev.id, req.user.id) ? 'leader' : approverRow(ev.id, req.user.id)?.role || 'leader';
-  const name = req.user.nickname || req.user.username;
+  const name = displayNameOf(req.user);
   db.exec('BEGIN');
   try {
     if (result === 'approved') {
@@ -702,6 +713,7 @@ r.get('/stats', (req, res) => {
     }
     if (x.status === 'approved') { g.invoice_pending += 1; u.invoice_pending += 1; }
   }
+  // by_user.name 取申请时署名快照（displayNameOf 文本），原样输出即可，不再补实时 real_name
   res.json({
     total: rows.length,
     total_amount: round2(rows.reduce((s, x) => s + (APPROVED_STATES.has(x.status) ? x.amount : 0), 0)),
