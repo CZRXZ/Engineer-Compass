@@ -501,7 +501,9 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
           <el-table-column prop="id" label="ID" width="70" />
           <el-table-column label="用户" min-width="140">
             <template #default="{ row }">
-              <b>{{ row.nickname || row.username }}</b>
+              <router-link :to="`/user/${row.id}`" target="_blank" class="user-link" title="新标签页查看 TA 的公开主页">
+                <b>{{ row.nickname || row.username }}</b>
+              </router-link>
               <span class="cell-sub">@{{ row.username }}</span>
             </template>
           </el-table-column>
@@ -692,7 +694,11 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
           <el-table-column prop="create_time" label="时间" width="165" :formatter="fmtT" />
           <el-table-column label="用户" width="170">
             <template #default="{ row }">
-              <b>{{ displayName(row) || ('用户#' + row.user_id) }}</b>
+              <router-link v-if="row.user_id" :to="`/user/${row.user_id}`" target="_blank"
+                class="user-link" title="新标签页查看 TA 的公开主页">
+                <b>{{ displayName(row) || ('用户#' + row.user_id) }}</b>
+              </router-link>
+              <b v-else>{{ '用户#' + row.user_id }}</b>
               <span class="cell-sub">@{{ row.username || '已注销' }}</span>
             </template>
           </el-table-column>
@@ -1010,6 +1016,8 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
 .count { font-size: 12.5px; color: var(--text-2, #64748b); }
 .tip { font-size: 12px; color: var(--text-2, #64748b); }
 .cell-sub { color: var(--text-2, #94a3b8); font-size: 12px; margin-left: 6px; }
+.user-link { color: inherit; text-decoration: none; }
+.user-link:hover b { color: var(--primary, #2563eb); text-decoration: underline; }
 .pg { margin-top: 12px; justify-content: flex-end; }
 .fb-meta { padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border, #e2e8f0); line-height: 1.9; }
 .fb-content {
