@@ -324,6 +324,9 @@ export const api = {
   },
   // 后台：访问记录（含游客）
   adminVisits: (params) => req(`/admin/visits${qs(params)}`),
+  // 后台：用户反馈（feedback 表留档，提交时另发邮件给管理员）
+  adminFeedback: (params) => req(`/admin/feedback${qs(params)}`),
+  adminFeedbackDelete: (id) => req(`/admin/feedback/${id}`, { method: 'DELETE' }),
   serverStatus: () => req('/admin/server-status'),
   // 公告（公开）：全局顶部横幅
   announcementLatest: () => req('/announcements/latest'),

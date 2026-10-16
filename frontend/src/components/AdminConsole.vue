@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '../api.js';
 import auth from '../auth.js';
 import { fmtDateTime, fmtDateTimeS } from '../utils/time.js';
+import { displayName } from '../utils/displayName.js';
 import { compressImage, shrinkHint } from '../utils/imageCompress.js';
 import { openImage } from '../utils/imageViewer.js';
 
@@ -19,6 +20,7 @@ const ACTION_LABELS = {
   'comment-share': '分享评论', 'comment-team': '小组评论',
   'user-status': '封禁/禁言', 'user-role': '角色管理',
   'realname-set': '实名认证', 'realname-change': '修改实名', 'realname-remind': '补发实名提醒',
+  'feedback-delete': '删除用户反馈',
   'password-remind': '补发改密提醒',
   'post-delete': '删除帖子', 'comment-delete': '删除评论',
   'announce-create': '发布公告', 'announce-update': '编辑公告', 'announce-delete': '删除公告',
@@ -210,6 +212,35 @@ async function loadVisits() {
   } finally {
     visits.loading = false;
   }
+}
+
+// ==================== Tab 用户反馈 ====================
+const feedback = reactive({ loading: false, q: '', list: [], total: 0, page: 1, size: 20 });
+async function loadFeedback() {
+  feedback.loading = true;
+  try {
+    const r = await api.adminFeedback({ q: feedback.q, page: feedback.page, size: feedback.size });
+    feedback.list = r.list; feedback.total = r.total;
+  } catch (e) {
+    ElMessage.error(e.message);
+  } finally {
+    feedback.loading = false;
+  }
+}
+const fbView = ref(null);
+function viewFeedback(f) { fbView.value = f; }
+async function delFeedback(f) {
+  try {
+    await ElMessageBox.confirm(`确定删除该条用户反馈？删除后不可恢复。`, '删除反馈', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    });
+  } catch { return; }
+  try {
+    await api.adminFeedbackDelete(f.id);
+    ElMessage.success('已删除');
+    if (fbView.value?.id === f.id) fbView.value = null;
+    loadFeedback();
+  } catch (e) { ElMessage.error(e.message); }
 }
 
 // ==================== Tab4 公告管理 ====================
@@ -440,7 +471,7 @@ const pct = (used, total) => (total ? Math.round((used / total) * 100) : 0);
 // el-table 时间列 formatter：UTC 串 → 本地 'YYYY-MM-DD HH:MM'（DB CURRENT_TIMESTAMP 是 UTC）
 const fmtT = (_r, _c, v) => fmtDateTime(v);
 
-onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisits(); loadAnns(); loadResources(); loadHonors(); loadStatus(); });
+onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisits(); loadFeedback(); loadAnns(); loadResources(); loadHonors(); loadStatus(); });
 </script>
 
 <template>
@@ -649,6 +680,41 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
           :page-size="visits.size" v-model:current-page="visits.page" @current-change="loadVisits" />
       </el-tab-pane>
 
+      <!-- ========== Tab 用户反馈 ========== -->
+      <el-tab-pane label="📮 用户反馈" name="feedback">
+        <div class="toolbar">
+          <el-input v-model="feedback.q" placeholder="搜索正文 / 邮箱 / 用户名" clearable style="width: 260px"
+            @keyup.enter="feedback.page = 1; loadFeedback()" @clear="feedback.page = 1; loadFeedback()" />
+          <el-button @click="feedback.page = 1; loadFeedback()">查询</el-button>
+          <span class="count">共 {{ feedback.total }} 条反馈</span>
+        </div>
+        <el-table :data="feedback.list" v-loading="feedback.loading" stripe>
+          <el-table-column prop="create_time" label="时间" width="165" :formatter="fmtT" />
+          <el-table-column label="用户" width="170">
+            <template #default="{ row }">
+              <b>{{ displayName(row) || ('用户#' + row.user_id) }}</b>
+              <span class="cell-sub">@{{ row.username || '已注销' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="联系邮箱" width="190">
+            <template #default="{ row }">
+              <span v-if="row.contact_email">{{ row.contact_email }}</span>
+              <span v-else class="cell-sub">未绑定</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="content" label="反馈内容" min-width="280" show-overflow-tooltip />
+          <el-table-column label="操作" width="150">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="viewFeedback(row)">查看全文</el-button>
+              <el-button link type="danger" size="small" @click="delFeedback(row)">删除</el-button>
+            </template>
+          </el-table-column>
+          <template #empty>暂无用户反馈</template>
+        </el-table>
+        <el-pagination class="pg" background layout="total, prev, pager, next" :total="feedback.total"
+          :page-size="feedback.size" v-model:current-page="feedback.page" @current-change="loadFeedback" />
+      </el-tab-pane>
+
       <!-- ========== Tab 公告管理 ========== -->
       <el-tab-pane label="📢 公告管理" name="anns">
         <div class="toolbar">
@@ -851,6 +917,22 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
       </div>
     </el-dialog>
 
+    <!-- 用户反馈全文 -->
+    <el-dialog :model-value="!!fbView" title="📮 用户反馈" width="560px"
+      @update:model-value="(v) => { if (!v) fbView = null; }">
+      <template v-if="fbView">
+        <div class="fb-meta">
+          <div><b>{{ displayName(fbView) || ('用户#' + fbView.user_id) }}</b> <span class="cell-sub">@{{ fbView.username || '已注销' }}</span></div>
+          <div class="cell-sub">{{ fbView.contact_email ? '联系邮箱：' + fbView.contact_email : '未绑定邮箱' }} ｜ {{ fmtDateTime(fbView.create_time) }}</div>
+        </div>
+        <div class="fb-content">{{ fbView.content }}</div>
+      </template>
+      <template #footer>
+        <el-button type="danger" @click="delFeedback(fbView)">删除</el-button>
+        <el-button type="primary" @click="fbView = null">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 公告发布 / 编辑弹窗 -->
     <el-dialog v-model="annDlg" :title="annForm.id ? '编辑公告' : '发布公告'" width="520px" :close-on-click-modal="false">
       <el-form label-width="70px">
@@ -929,6 +1011,11 @@ onMounted(() => { loadUsers(); loadPosts(); loadComments(); loadLogs(); loadVisi
 .tip { font-size: 12px; color: var(--text-2, #64748b); }
 .cell-sub { color: var(--text-2, #94a3b8); font-size: 12px; margin-left: 6px; }
 .pg { margin-top: 12px; justify-content: flex-end; }
+.fb-meta { padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border, #e2e8f0); line-height: 1.9; }
+.fb-content {
+  max-height: 46vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.8; font-size: 14px; color: var(--text-1, #1e293b);
+}
 
 .stat-grid {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;

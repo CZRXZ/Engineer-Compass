@@ -328,6 +328,42 @@ r.get('/visits', (req, res) => {
   res.json({ total, page, size, list });
 });
 
+// GET /api/admin/feedback?page&size&q — 用户反馈（feedback 表留档；提交时另发邮件给 FEEDBACK_TO）
+// q 模糊反馈正文 / 联系邮箱 / 用户名 / 昵称 / 真名；LEFT JOIN 防用户行缺失（正常 FK 级联不会发生）
+r.get('/feedback', (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const size = Math.min(100, Math.max(1, Number(req.query.size) || 20));
+  const q = String(req.query.q || '').trim();
+  const conds = [];
+  const params = [];
+  if (q) {
+    conds.push('(f.content LIKE ? OR f.contact_email LIKE ? OR u.username LIKE ? OR u.nickname LIKE ? OR u.real_name LIKE ?)');
+    const like = `%${q}%`;
+    params.push(like, like, like, like, like);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const total = db.prepare(
+    `SELECT COUNT(*) AS n FROM feedback f LEFT JOIN user u ON u.id = f.user_id ${where}`
+  ).get(...params).n;
+  const list = db.prepare(
+    `SELECT f.id, f.content, f.contact_email, f.create_time, f.user_id,
+            u.username, u.nickname, u.real_name, u.status AS user_status
+     FROM feedback f LEFT JOIN user u ON u.id = f.user_id ${where}
+     ORDER BY f.id DESC LIMIT ? OFFSET ?`
+  ).all(...params, size, (page - 1) * size);
+  res.json({ total, page, size, list });
+});
+
+// DELETE /api/admin/feedback/:id — 删除反馈（清理垃圾/已处理反馈；审计留痕）
+r.delete('/feedback/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const f = db.prepare('SELECT id, user_id, substr(content, 1, 40) AS preview FROM feedback WHERE id = ?').get(id);
+  if (!f) return res.status(404).json({ error: '反馈不存在' });
+  db.prepare('DELETE FROM feedback WHERE id = ?').run(id);
+  logAudit(req, 'feedback-delete', f.preview || `#${id}`, { target_id: id, user_id: f.user_id });
+  res.json({ message: '反馈已删除' });
+});
+
 export default r;
 
 // ---- 前台公告（public，挂 /api/announcements）：App.vue 全局顶部横幅用 ----
