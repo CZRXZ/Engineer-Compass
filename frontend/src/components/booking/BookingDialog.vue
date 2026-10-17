@@ -175,7 +175,10 @@ async function searchUser(q) {
 }
 
 // 400ms 防抖实时校验（窗口/容量/库存/冲突，后端为最终准绳）
+// checkSeq 丢弃过期响应：快速连改开始/结束时，先发出的「结束早于开始」400（后端短路、
+// 返回极快）可能晚于后发出的 200 落回，无序号保护会把成功态反盖成错误。
 let timer = null;
+let checkSeq = 0;
 async function runCheck() {
   checkError.value = '';
   checkOk.value = false;
@@ -186,11 +189,12 @@ async function runCheck() {
   }
   clearTimeout(timer);
   timer = setTimeout(async () => {
+    const seq = ++checkSeq;
     try {
       await api.bookingConflicts(props.project.id, payload());
-      checkOk.value = true;
+      if (seq === checkSeq) checkOk.value = true;
     } catch (e) {
-      checkError.value = e.message;
+      if (seq === checkSeq) checkError.value = e.message;
     }
   }, 400);
 }

@@ -146,13 +146,16 @@ const router = createRouter({
 
 // 离开每条路由前记下滚动位置（beforeEach 时 DOM 还没换，scrollY 仍是上一页的）；
 // Map 有界：满了就丢最早的，防长会话无界增长。
-// 实名硬门禁：booking/purchase 进页面前先查 real_name；老缓存没这个键时强制 me() 补刷，
-// 仍未实名 → 打开不可关弹窗并中止导航（expense 不加：?code= 匿名邀请链路要保持开放，负责人侧由 API 403 兜底）。
+// 实名硬门禁（全站口径）：只要登录且 real_name 为空，任何页面（含首页）都弹不可关弹窗，
+// 弹窗遮罩本身阻断页内一切操作；未登录态（含 /expense?code= 匿名邀请面）直接放行。
+// booking/purchase 额外 return false 取消导航：页内组件不挂载、不发必然 403 的请求，
+// pendingTo 记目标，填名成功后 App.vue 自动跳转；其他路由放行，弹窗压在页面上。
+// 老缓存没有 real_name 键时强制 me() 补刷；网络失败按 fail-open（后端三模块 403 兜底）。
 router.beforeEach(async (to, from) => {
   scrollMemo.set(from.fullPath, window.scrollY);
   if (scrollMemo.size > 100) scrollMemo.delete(scrollMemo.keys().next().value);
 
-  if (to.meta.requiresRealName && auth.token) {
+  if (auth.token && to.name !== 'login') {
     let user = auth.user;
     if (!user || !('real_name' in user)) {
       try {
@@ -161,9 +164,12 @@ router.beforeEach(async (to, from) => {
         user = r.user;
       } catch { user = auth.user; }
     }
-    if (!user?.real_name) {
-      openGate(to.fullPath);
-      return false;
+    if (user && !user.real_name) {
+      if (to.meta.requiresRealName) {
+        openGate(to.fullPath);
+        return false;
+      }
+      openGate();
     }
   }
   return true;

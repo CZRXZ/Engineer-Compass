@@ -1,5 +1,5 @@
 <script setup>
-// 实名认证卡：未实名红色警示（三模块硬门禁）；已实名显示真名，可随时修改（无审核）。
+// 实名认证卡：未实名红色警示（全站硬门禁，登录即弹强制窗）；已实名显示真名，可随时修改（无审核）。
 import { ref } from 'vue';
 import auth from '../../auth.js';
 import RealNameDialog from './RealNameDialog.vue';
@@ -21,7 +21,7 @@ const dlg = ref(false);
             <span class="mono">{{ auth.user.real_name }}</span> · 资源预约 / 经费报销 / 物料采购署名使用
           </template>
           <template v-else>
-            <span class="rn-warn">资源预约 / 经费报销 / 物料采购需实名后才能使用，请填写真实姓名</span>
+            <span class="rn-warn">未完成实名认证将无法使用本站功能，请填写真实姓名</span>
           </template>
         </p>
       </div>

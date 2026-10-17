@@ -245,7 +245,37 @@ try {
   ok('/share/:id 自动 replace 到新路由', curUrl() === projectUrl, curUrl());
 
   // ===== 7. 作者：「我的」行内开关转私密 =====
+  // A 未实名：登录后落在首页即弹强制实名窗（全站硬门禁——不必进入任何业务模块，先过闸才能操作）
   await authAs(A);
+  const gateA = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
+  await gateA.waitFor({ timeout: 8000 });
+  ok('首页即弹强制实名窗（无需进入预约/采购等模块）', curUrl() === '/' && (await gateA.count()) === 1, curUrl());
+  ok('首页强制弹窗：无 X、无取消，只能填名',
+    (await gateA.locator('.el-dialog__headerbtn:visible').count()) === 0
+    && (await gateA.getByRole('button', { name: '取消' }).count()) === 0
+    && (await gateA.getByRole('button', { name: '保存并继续' }).count()) === 1);
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  ok('ESC 后弹窗仍在', (await page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' }).count()) === 1);
+  await gateA.locator('input').fill('123');
+  await gateA.getByRole('button', { name: '保存并继续' }).click();
+  await sleep(200);
+  ok('纯数字姓名前端即时拦截（弹窗不关、显示错误文案）',
+    (await gateA.locator('.rn-err').innerText()).length > 0 && (await page.locator('.el-dialog:visible').count()) >= 1);
+  const aCntBefore = await api('/notifications/unread-count', { token: A.token });
+  ok('填写前 A 有未读实名公告', aCntBefore.notices >= 1, JSON.stringify(aCntBefore));
+  await gateA.locator('input').fill('探针实名');
+  const rnPut = page.waitForResponse((r) => r.url().includes('/auth/real-name') && r.request().method() === 'PUT' && r.status() === 200, { timeout: 8000 });
+  await gateA.getByRole('button', { name: '保存并继续' }).click();
+  await rnPut;
+  // el-dialog 离场有 ~300ms 过渡，等它真正隐藏再断言
+  const gateHome = page.locator('.el-dialog', { hasText: '请先完成实名认证' });
+  await gateHome.waitFor({ state: 'hidden', timeout: 3000 });
+  ok('首页填名后弹窗关闭、URL 仍停在首页（无 pendingTo 不跳转）', await gateHome.isHidden() && curUrl() === '/', curUrl());
+  const aCntAfter = await api('/notifications/unread-count', { token: A.token });
+  ok('实名后 A 的实名公告自动已读（notices=0）', aCntAfter.notices === 0, JSON.stringify(aCntAfter));
+  A = { token: A.token, user: (await api('/auth/me', { token: A.token })).user };
+
   await gotoWaitList('/share');
   // 「我的」入口已移到头部「项目上传」旁；点击后 scope=mine 重新拉列表
   {
@@ -322,34 +352,25 @@ try {
   const loginOld = await jreq('/auth/login', { method: 'POST', body: { email: emailA, password: 'pass123456' } });
   ok('旧密码被拒 401', loginOld.res.status === 401, `实际 ${loginOld.res.status}`);
 
-  // ===== 8.5 账号安全页：实名认证卡（未实名 → 弹窗填写 → 已实名；公告联动已读）=====
+  // ===== 8.5 账号安全页：实名卡已实名态（首页闸机已在 §7 过过），「修改」弹窗可关闭、改名即时生效 =====
   const rnCard = page.locator('.ac-card', { hasText: '实名认证' }).first();
   await rnCard.waitFor({ timeout: 8000 });
-  ok('实名卡出现且为「未实名」红标 + 三模块提示',
-    (await rnCard.innerText()).includes('未实名') && (await rnCard.innerText()).includes('物料采购需实名后才能使用'));
-  const aCntBefore = await api('/notifications/unread-count', { token: A.token });
-  ok('填写前 A 有未读实名公告', aCntBefore.notices >= 1, JSON.stringify(aCntBefore));
-  await rnCard.getByRole('button', { name: '去填写' }).click();
-  let rnDlg = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
+  ok('实名卡显示「已实名」绿标 + 真名',
+    (await rnCard.innerText()).includes('已实名') && (await rnCard.innerText()).includes('探针实名'));
+  await rnCard.getByRole('button', { name: '修改' }).click();
+  const rnDlg = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
   await rnDlg.waitFor({ timeout: 6000 });
-  ok('账号页弹窗可关闭（有 X 与取消，区别于硬门禁）',
+  ok('账号页修改弹窗可关闭（有 X 与取消，区别于硬门禁）',
     (await rnDlg.locator('.el-dialog__headerbtn:visible').count()) === 1
     && (await rnDlg.getByRole('button', { name: '取消' }).count()) === 1);
-  await rnDlg.locator('input').fill('123');
+  const rnPut2 = page.waitForResponse((r) => r.url().includes('/auth/real-name') && r.request().method() === 'PUT', { timeout: 8000 });
+  await rnDlg.locator('input').fill('探针实名改');
   await rnDlg.getByRole('button', { name: '保存并继续' }).click();
-  await sleep(200);
-  ok('纯数字姓名前端即时拦截（弹窗不关、显示错误文案）',
-    (await rnDlg.locator('.rn-err').innerText()).length > 0 && (await page.locator('.el-dialog:visible').count()) >= 1);
-  await rnDlg.locator('input').fill('探针实名');
-  const rnPut = page.waitForResponse((r) => r.url().includes('/auth/real-name') && r.request().method() === 'PUT', { timeout: 8000 });
-  await rnDlg.getByRole('button', { name: '保存并继续' }).click();
-  await rnPut;
+  await rnPut2;
   await sleep(400);
-  ok('保存后弹窗关闭，卡片变「已实名」并显示真名',
+  ok('改名后弹窗关闭，卡片更新为新真名',
     (await page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' }).count()) === 0
-    && (await rnCard.innerText()).includes('已实名') && (await rnCard.innerText()).includes('探针实名'));
-  const aCntAfter = await api('/notifications/unread-count', { token: A.token });
-  ok('实名后 A 的实名公告自动已读（notices=0）', aCntAfter.notices === 0, JSON.stringify(aCntAfter));
+    && (await rnCard.innerText()).includes('已实名') && (await rnCard.innerText()).includes('探针实名改'));
 
   // ===== 9. 登录页「忘记密码」公开重置流（B 账号，未登录）=====
   await logout();
@@ -395,6 +416,9 @@ try {
   await page.getByText(/已向 1 位/).waitFor({ timeout: 6000 });
   const cnt = await api('/notifications/unread-count', { token: C.token });
   ok('补发后 C 未读 notices 再 ≥1', cnt.notices >= 1, JSON.stringify(cnt));
+  // C 马上要在浏览器里操作消息中心：全站门禁登录即拦，先 API 实名并用最新 user 卡注入
+  await api('/auth/real-name', { method: 'PUT', token: C.token, body: { real_name: '探针西名' } });
+  C.user = (await api('/auth/me', { token: C.token })).user;
 
   // ===== 11. 消息中心「系统通知」组 UI 可见（C 登录）=====
   await authAs(C);
@@ -410,25 +434,26 @@ try {
     && (await page.locator('body').innerText()).includes('请尽快修改初始密码'),
     `badge=${noticeBadge}`);
 
-  // ===== 11.5 实名硬门禁：未实名 B 进 /booking 被不可关弹窗拦截，填名后放行 =====
-  // 用站内点击触发导航（硬加载 /booking 时取消「初始导航」地址栏不回退，是 vue-router 正常行为；
-  // 站内导航 return false 才体现「URL 停在原页」契约）
+  // ===== 11.5 实名硬门禁：未实名 B 登录后首页即弹窗；再硬加载 /booking 取消初始导航，填名后自动放行 =====
   await authAs({ token: loginReset.data.token, user: loginReset.data.user });
-  await page.locator('a[href="/booking"]').first().click();
-  await sleep(500);
-  ok('门禁拦截后 URL 停在原页（导航取消）', curUrl() === '/', curUrl());
-  const gate = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
-  await gate.waitFor({ timeout: 8000 });
-  ok('硬门禁弹窗：无 X、无取消、遮罩/ESC 不关，只能实名',
-    (await gate.locator('.el-dialog__headerbtn:visible').count()) === 0
-    && (await gate.getByRole('button', { name: '取消' }).count()) === 0
-    && (await gate.getByRole('button', { name: '保存并继续' }).count()) === 1);
+  const gateB = page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' });
+  await gateB.waitFor({ timeout: 8000 });
+  ok('未实名 B 登录后首页即弹硬门禁窗（全站口径，不用先进业务模块）', curUrl() === '/', curUrl());
+  ok('硬门禁弹窗：无 X、无取消，只能实名',
+    (await gateB.locator('.el-dialog__headerbtn:visible').count()) === 0
+    && (await gateB.getByRole('button', { name: '取消' }).count()) === 0
+    && (await gateB.getByRole('button', { name: '保存并继续' }).count()) === 1);
   await page.keyboard.press('Escape');
   await sleep(200);
   ok('ESC 后弹窗仍在', (await page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' }).count()) === 1);
-  await gate.locator('input').fill('路乙实名');
+  // 弹窗压顶时硬加载受保护模块：守卫取消「初始导航」（组件不挂载、不发列表请求），目标记入 pendingTo
+  await page.goto(WEB + '/booking');
+  await sleep(300);
+  ok('硬加载 /booking 仍被弹窗拦截（导航取消）',
+    (await page.locator('.el-dialog:visible', { hasText: '请先完成实名认证' }).count()) === 1);
+  await gateB.locator('input').fill('路乙实名');
   const enterP = page.waitForResponse((r) => r.url().includes('/booking/projects') && r.request().method() === 'GET' && r.status() === 200, { timeout: 10000 });
-  await gate.getByRole('button', { name: '保存并继续' }).click();
+  await gateB.getByRole('button', { name: '保存并继续' }).click();
   await page.waitForURL('**/booking', { timeout: 10000 });
   await enterP;
   ok('实名保存后自动跳转到 /booking 且预约列表 200', curUrl() === '/booking', curUrl());

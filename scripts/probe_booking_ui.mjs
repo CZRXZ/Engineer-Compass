@@ -130,6 +130,11 @@ try {
   };
   // 甘特拖选：track 行上从 slotA 格拖到 slotB 格（可反向，slot 为明天列内 0–30）
   async function dragOn(pg, trackIndex, slotA, slotB) {
+    // 进入项目页一律用 ?date=明天（见各 login/goto），甘特挂载即在明天所在周；
+    // 不能靠拖前点「下一周」：v-loading 遮罩与 timeline 重渲染会吞掉 pointerdown。
+    // 必须等 v-loading 遮罩消失：建资源/跳页触发的 timeline 刷新未返回时，遮罩盖在网格上
+    // 吞掉 pointerdown（结构元素先于数据渲染，只等 .wg-track 不保险，遮罩恰好在拖拽期间才撤）
+    await pg.locator('.wg-scroll .el-loading-mask').first().waitFor({ state: 'hidden', timeout: 8000 }).catch(() => {});
     // 先把明天所在日列横向滚入视口
     await pg.locator('.wg-scroll').evaluate((el, idx) => {
       const dayW = (el.scrollWidth - 150) / 7;
@@ -141,9 +146,10 @@ try {
     await head.waitFor();
     const hb = await head.boundingBox();
     const tb = await track.boundingBox();
-    // 起点落在 slotA 格内；终点是排他刻度 slotB → 坐标取该刻度前 5px（落进前一格）
-    const xStart = () => hb.x + (hb.width * slotA) / 30 + 4;
-    const xEnd = () => hb.x + (hb.width * slotB) / 30 - 5;
+    // 起止都取格子中心（终点排他刻度 slotB → 落 slotB-1 中心）：列宽仅 ~10px，
+    // 旧的「格线 +4/-5px」在缩放/滚动误差下会越界落进相邻预约块，被 @pointerdown.stop 吞掉
+    const xStart = () => hb.x + (hb.width * (slotA + 0.5)) / 30;
+    const xEnd = () => hb.x + (hb.width * (slotB - 0.5)) / 30;
     const y = tb.y + tb.height / 2;
     await pg.mouse.move(xStart(), y);
     await pg.mouse.down();
@@ -184,6 +190,8 @@ try {
   await pageA.waitForURL(/\/booking\/\d+$/, { timeout: 8000 });
   const pid = Number(pageA.url().split('/').pop());
   ok('建项后跳转项目页', Number.isInteger(pid) && pid > 0, pageA.url());
+  // 周日跑测时明天在下一自然周：直接 ?date= 定位到明天所在周，后续拖选坐标才落在未来日列
+  await pageA.goto(`${WEB}/booking/${pid}?date=${D}`);
   await pageA.locator('.wg-scroll .el-empty').waitFor({ timeout: 5000 });
   ok('空项目甘特显示空态', (await pageA.locator('.wg-scroll').innerText()).includes('还没有可用资源'));
 
@@ -244,10 +252,10 @@ try {
     flatBlock.includes(`张约甲（${A.user.nickname}）`) && blkText.includes('👥1') && blkText.includes('2.5小时'), blkText.replace(/\n/g, ' '));
 
   // ===== 4. B：重叠圈选被实时拦截 → 临时多人单 =====
-  await login(pageB, B, `${WEB}/booking/${pid}`);
+  await login(pageB, B, `${WEB}/booking/${pid}?date=${D}`);
   await pageB.locator('.wg-track').nth(0).waitFor();
-  // 从 12:00 空格反向拖进 10 点段（down 不能落在 A 的块上）
-  await dragOn(pageB, 0, 10, 7);
+  // 从 08:00 空格正向拖到 12:00 空格（两端都不能落在 A 的块上；路径穿过块即产生重叠）
+  await dragOn(pageB, 0, 2, 10);
   await dlg(pageB).waitFor();
   await sleep(700); // /conflicts 防抖 400ms
   ok('重叠时段实时冲突告警', await dlg(pageB).locator('.el-alert--error').isVisible()
@@ -308,8 +316,8 @@ try {
   ok('物品块立即 confirmed 蓝块 ×1', await pageB.locator('.wg-block.st-confirmed', { hasText: '×1' }).count() >= 1);
   ok('物品库存热度底色出现（半占 amber）', await pageB.locator('.wg-heat.heat-a').count() >= 1);
 
-  // 再圈重叠时段借 3 件：1+3>3 → 实时拒
-  await dragOn(pageB, 1, 6, 5);
+  // 再圈重叠时段借 3 件：1+3>3 → 实时拒（两端取空格 08:30/10:30，路径穿过已确认块）
+  await dragOn(pageB, 1, 3, 7);
   await dlg(pageB).waitFor();
   await dlg(pageB).locator('.el-input-number input').fill('3');
   await pageB.keyboard.press('Tab');
@@ -339,7 +347,7 @@ try {
   const notices = await api('/notifications/personal', { token: C.token });
   const n = notices.rows.find((x) => /^bk_approve_/.test(x.type) && x.link.includes(`/booking/${pid}?bid=`));
   ok('C 收到审批通过通知（含 bid link）', !!n, JSON.stringify(notices.rows.slice(0, 3)));
-  await login(pageC, C, `${WEB}${n.link}`);
+  await login(pageC, C, `${WEB}${n.link}&date=${D}`);
   const cDialog = pageC.locator('.el-dialog:visible');
   await cDialog.waitFor({ timeout: 8000 });
   await cDialog.getByText('已确认').first().waitFor({ timeout: 8000 });
@@ -350,7 +358,8 @@ try {
 
   // ===== 7. 390px 窄屏：手风琴 + 建约全链路 + 无横溢 =====
   await pageA.setViewportSize({ width: 390, height: 844 });
-  await pageA.goto(`${WEB}/booking/${pid}`);
+  // ?date= 定位到明天所在周（周日跑测时明天在下一自然周，手风琴日期下拉只列当前周）
+  await pageA.goto(`${WEB}/booking/${pid}?date=${D}`);
   await pageA.locator('.wg-m').waitFor({ timeout: 8000 });
   ok('窄屏渲染手风琴、不渲染大网格', await pageA.locator('.wg-m').isVisible()
     && !(await pageA.locator('.wg-grid').isVisible()));
