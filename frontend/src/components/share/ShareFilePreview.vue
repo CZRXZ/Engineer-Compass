@@ -7,8 +7,11 @@
 //    取 blob → URL.createObjectURL。卸载/换文件时必须 revoke，否则 30MB 的 blob 会一直挂在内存里。
 // 2. 文本一律 `<pre>{{ text }}</pre>` 插值渲染。**绝不用 v-html** —— 帖子内容来自其他用户，
 //    v-html 等于在本站源下执行任意 HTML/脚本，这是本页最大的 XSS 面。
-// 3. svg/html 虽然也是文本，但内联渲染同样等于执行脚本（后端 isInlineOk 已把它们排除），
-//    这里按二进制走下载，不给预览入口。
+// 3. svg 内联渲染等于执行脚本（后端 isInlineOk 已排除），按二进制走下载不给预览；
+//    **html 例外**：默认在 opaque origin 的 sandbox iframe 里直接渲染网页，可切「代码」看转义源码。
+//    sandbox 永远不能加 allow-same-origin —— 一旦加上，沙箱页面拿回本站源 = 在本站源下执行任意
+//    脚本（可读登录态、以受害者身份调本站 API）。allow-scripts 保留（网页常带脚本），opaque origin
+//    下脚本能跑但碰不到父窗口/存储/Cookie；外链/表单只能出网，不能回灌本站。
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '../../api.js';
@@ -27,7 +30,14 @@ const err = ref('');
 const blobUrl = ref('');
 const text = ref('');
 const truncated = ref(false);
-const kind = ref(''); // text | image | pdf | audio | video | other
+const codeLoaded = ref(false); // html 切到代码态时才懒拉 /text（默认渲染态不多拉一份）
+const codeLoading = ref(false);
+const htmlMode = ref('view'); // html 专属：view = 沙箱渲染网页 | code = 转义源码
+const kind = ref(''); // text | html | image | pdf | audio | video | other
+
+// html 判定：以扩展名为准、mime text/html 兜底（部分上传端把 .html 存成 octet-stream）
+const HTML_RE = /\.html?$/i;
+const isHtmlFile = (f) => !!f && (String(f.mime || '').toLowerCase() === 'text/html' || HTML_RE.test(f.name || ''));
 
 const isGitee = computed(() => props.file?.source === 'gitee');
 // 在 Gitee 打开（新标签页）。仓库条目的「下载」也走它 —— 本站只代理字节，不落盘、不重发。
@@ -36,12 +46,33 @@ const giteeBlobUrl = computed(() =>
 
 function cleanup() {
   if (blobUrl.value) { URL.revokeObjectURL(blobUrl.value); blobUrl.value = ''; }
-  text.value = ''; truncated.value = false; err.value = ''; kind.value = '';
+  text.value = ''; truncated.value = false; codeLoaded.value = false;
+  err.value = ''; kind.value = ''; htmlMode.value = 'view';
 }
 
 const IMG = /^image\/(?!svg)/;
 // Gitee 条目的字节不在本站磁盘上，只能让后端去仓库代理（/files/:fid/raw）
 const NEW_URL = async (f) => URL.createObjectURL(await api.shareFileBlob(f.id, { raw: f.source === 'gitee' }));
+// html 渲染态：强制 blob 的 MIME 为 text/html（后端对 html 走 attachment 下载，
+// Content-Type 仍在，但 Gitee 代理/历史数据可能给 octet-stream，不强制 iframe 会退化成下载）
+async function newHtmlUrl(f) {
+  const b = await api.shareFileBlob(f.id, { raw: f.source === 'gitee' });
+  const typed = b.type === 'text/html' ? b : new Blob([b], { type: 'text/html' });
+  return URL.createObjectURL(typed);
+}
+// 切「代码」时懒拉文本（512KB 截断，与普通文本预览同口径）
+async function switchHtmlMode(m) {
+  if (htmlMode.value === m) return;
+  htmlMode.value = m;
+  if (m === 'code' && !codeLoaded.value) {
+    codeLoading.value = true;
+    try {
+      const r = await api.shareFileText(props.file.id);
+      text.value = r.text; truncated.value = !!r.truncated; codeLoaded.value = true;
+    } catch (e) { ElMessage.error(e.message); htmlMode.value = 'view'; }
+    finally { codeLoading.value = false; }
+  }
+}
 
 async function load(f) {
   cleanup();
@@ -52,7 +83,10 @@ async function load(f) {
     // 先全部取到本地再一次性上屏：中途赋值会让「空 <pre>（假可见）/ src 为空的 <img>」先闪一下，
     // 探针与肉眼都会把它当成「加载完了但内容是空的」
     let kind2 = 'other', txt = '', trun = false, url = '';
-    if (isTextLike(mime, f.name)) {
+    if (isHtmlFile(f)) {
+      // html 默认沙箱渲染整页（不取文本，切到代码态再懒拉）
+      kind2 = 'html'; url = await newHtmlUrl(f);
+    } else if (isTextLike(mime, f.name)) {
       const r = await api.shareFileText(f.id);
       kind2 = 'text'; txt = r.text; trun = !!r.truncated;
     } else if (mime === 'image/svg+xml') {
@@ -96,14 +130,30 @@ async function download() {
       <GhIcon :name="isGitee ? 'repo' : 'file-directory-fill'" :size="14" />
       <span class="fp-path" :title="file.path">{{ file.path }}</span>
       <span v-if="isGitee" class="fp-tag">Gitee</span>
+      <span v-if="kind === 'html'" class="fp-seg">
+        <button class="fp-btn" :class="{ on: htmlMode === 'view' }" title="沙箱中渲染网页"
+          @click="switchHtmlMode('view')">🌐 网页</button>
+        <button class="fp-btn" :class="{ on: htmlMode === 'code' }" title="查看 HTML 源码"
+          @click="switchHtmlMode('code')">&lt;/&gt; 代码</button>
+      </span>
       <span class="fp-size">{{ fmtSize(file.size) }}</span>
       <a v-if="isGitee && giteeBlobUrl" class="fp-btn" :href="giteeBlobUrl" target="_blank" rel="noopener noreferrer">在 Gitee 打开</a>
       <button class="fp-btn" title="下载" @click="download"><GhIcon name="download" :size="14" /> 下载</button>
       <button class="fp-btn x" title="关闭预览" @click="emit('close')">✕</button>
     </div>
 
-    <div v-loading="busy" class="fp-body">
+    <div v-loading="busy || codeLoading" class="fp-body">
       <p v-if="err" class="fp-err">{{ err }}</p>
+
+      <!-- html 渲染态：opaque origin 沙箱（禁 allow-same-origin），脚本可跑但拿不到本站身份 -->
+      <iframe v-else-if="kind === 'html' && htmlMode === 'view'" :src="blobUrl" class="fp-html"
+        sandbox="allow-scripts allow-popups allow-forms" referrerpolicy="no-referrer" :title="file.name"></iframe>
+
+      <!-- html 源码态：与普通文本同口径，Vue 插值转义 -->
+      <template v-else-if="kind === 'html' && htmlMode === 'code'">
+        <pre class="fp-pre">{{ text }}</pre>
+        <p v-if="truncated" class="fp-trunc">文件较大，仅显示前 512KB —— 完整内容请下载</p>
+      </template>
 
       <template v-else-if="kind === 'text'">
         <!-- 文本：Vue 插值天然转义。**绝不能用 v-html** —— 内容来自其他用户 -->
@@ -147,6 +197,12 @@ async function download() {
   &:hover { border-color: var(--primary); color: var(--primary); }
   &.x { border: 0; background: transparent; font-size: 14px; padding: 0 2px; }
 }
+/* 网页/代码分段开关：两钮拼成一组（中间圆角/边框重叠） */
+.fp-seg { flex: none; display: inline-flex; .fp-btn { border-radius: 0; margin-left: -1px; }
+  .fp-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+  .fp-btn:last-child { border-radius: 0 6px 6px 0; }
+  .fp-btn.on { border-color: var(--primary); color: var(--primary); background: var(--primary-tint); z-index: 1; }
+}
 .fp-body { min-height: 90px; max-height: 520px; overflow: auto; }
 .fp-pre {
   margin: 0; padding: 12px 14px; font-size: 12.5px; line-height: 1.6;
@@ -156,6 +212,8 @@ async function download() {
 .fp-trunc { margin: 0; padding: 6px 14px 10px; font-size: 12px; color: var(--text-3); }
 .fp-img { display: block; max-width: 100%; margin: 0 auto; }
 .fp-pdf { width: 100%; height: 480px; border: 0; background: #fff; }
+/* html 沙箱渲染：白底（网页多按白底写）+ 暗主题下显式分隔边 */
+.fp-html { width: 100%; height: 480px; border: 0; background: #fff; display: block; }
 .fp-audio { display: block; width: 100%; padding: 12px; box-sizing: border-box; }
 .fp-video { display: block; max-width: 100%; max-height: 460px; margin: 0 auto; }
 .fp-other { padding: 22px; text-align: center; font-size: 13px; color: var(--text-3); }

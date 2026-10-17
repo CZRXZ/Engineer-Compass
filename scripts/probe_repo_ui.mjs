@@ -125,6 +125,16 @@ try {
   const title = `探针仓库 ProbeKit${stamp}`;
   const up = await uploadFolder(A.token, [
     ['readme.md', '# ProbeKit\n探针项目正文 ABC', 'readme.md'],
+    ['page.html', [
+      '<!doctype html><html><head><meta charset="utf-8"><title>探针页</title></head>',
+      '<body><h1 id="t">探针网页渲染 OK</h1>',
+      '<script>',
+      "document.getElementById('t').textContent='JS_RUN_OK';",
+      // 越权访问父窗口必须抛 SecurityError（opaque origin 隔离）；不抛=沙箱漏了
+      "try{parent.document.body.setAttribute('data-xss','1')}",
+      "catch(e){var d=document.createElement('div');d.id='iso';d.textContent='ISOLATED';document.body.appendChild(d);}",
+      '</script></body></html>',
+    ].join('\n'), 'page.html'],
     ['a.txt', 'aaa内容', 'docs/a.txt'],
     ['b.txt', 'bbb深层', 'docs/sub/b.txt'],
   ]);
@@ -193,9 +203,8 @@ try {
   await page.locator('.pv-frow', { hasText: 'docs' }).waitFor();
   const crumbText = await page.locator('.pv-crumb').innerText();
   ok('面包屑含 @用户 与项目标题', crumbText.includes('@' + uA) && crumbText.includes(title), crumbText);
-  ok('根目录为 readme.md + docs 两项',
-    (await page.locator('.pv-frow').count()) === 2
-    && !!(await page.locator('.pv-frow', { hasText: 'readme.md' }).count()));
+  ok('根目录为 docs + page.html + readme.md 三项（目录在前，文件按名）',
+    (await page.locator('.pv-frow .pv-fname').allInnerTexts()).join('|') === 'docs|page.html|readme.md');
   await page.locator('.gh-rbody').waitFor();
   ok('README 正文渲染', (await page.locator('.gh-rbody').innerText()).includes('探针项目正文 ABC'));
 
@@ -229,6 +238,43 @@ try {
   await page.locator('.fp-btn.x').click();
   await page.waitForURL('**/tree/docs');
   ok('关闭预览回到所在目录', curUrl() === `${projectUrl}/tree/docs`);
+
+  // ===== 4.5 html 文件：默认沙箱渲染网页（非源码），可切「代码」，脚本被 origin 隔离 =====
+  await page.goto(`${WEB}${projectUrl}/blob/page.html`);
+  const htmlFrameEl = page.locator('iframe.fp-html');
+  await htmlFrameEl.waitFor({ state: 'visible', timeout: 10000 });
+  const sandbox = await htmlFrameEl.getAttribute('sandbox') || '';
+  ok('html 默认走 iframe 渲染且 sandbox 精确白名单（无 allow-same-origin）',
+    sandbox === 'allow-scripts allow-popups allow-forms' && !sandbox.includes('allow-same-origin'), sandbox);
+  ok('html iframe src 是 blob: objectURL（带请求头取字节，token 不进 URL）',
+    (await htmlFrameEl.getAttribute('src') || '').startsWith('blob:'));
+  // opaque origin 沙箱里的 Playwright 跨源 frame 可直接定位
+  const fl = page.frameLocator('iframe.fp-html');
+  await fl.locator('#t').waitFor({ timeout: 10000 });
+  ok('网页被真正渲染（不是源码）且页内脚本已执行：#t=JS_RUN_OK',
+    (await fl.locator('#t').innerText()) === 'JS_RUN_OK');
+  ok('沙箱脚本越权访问父窗口被浏览器拒绝（#iso=ISOLATED，隔离生效）',
+    (await fl.locator('#iso').innerText().catch(() => '')) === 'ISOLATED');
+  ok('父窗口文档未被沙箱页写入 data-xss（同源后门不存在）',
+    await page.evaluate(() => document.body.getAttribute('data-xss') || '') === '');
+  ok('渲染态不显示源码 <pre>，工具栏有「网页/代码」开关',
+    (await page.locator('.fp-pre').count()) === 0
+    && (await page.locator('.fp-seg .fp-btn.on').innerText()) === '🌐 网页');
+  const textP = page.waitForResponse((r) => r.url().includes('/files/') && r.url().includes('/text') && r.status() === 200, { timeout: 8000 });
+  await page.locator('.fp-seg .fp-btn', { hasText: '代码' }).click();
+  await textP;
+  for (let i = 0; i < 20; i++) {
+    if ((await page.locator('.fp-pre').innerText()).includes('<h1')) break;
+    await sleep(100);
+  }
+  const srcView = await page.locator('.fp-pre').innerText();
+  ok('切到代码态：显示转义源码（含 <h1>/<script> 原文），iframe 卸载',
+    srcView.includes('探针网页渲染 OK') && srcView.includes('<script>')
+    && srcView.includes('parent.document') && (await htmlFrameEl.count()) === 0);
+  await page.locator('.fp-seg .fp-btn', { hasText: '网页' }).click();
+  await page.locator('iframe.fp-html').waitFor({ state: 'visible', timeout: 8000 });
+  ok('切回网页态：iframe 重新挂载渲染',
+    (await page.frameLocator('iframe.fp-html').locator('#t').innerText()) === 'JS_RUN_OK');
 
   // ===== 5. 用户项目主页 =====
   await page.locator('.pv-crumb .pv-seg.owner').click();
