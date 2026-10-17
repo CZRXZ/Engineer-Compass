@@ -7,6 +7,7 @@ import StudyView from './components/StudyView.vue';
 import TeamView from './components/TeamView.vue';
 import ShareView from './components/ShareView.vue';
 import SharePostView from './components/SharePostView.vue';
+import HtmlFrameView from './components/share/HtmlFrameView.vue';
 // GitHub 风资源路由：/:username 用户项目页、/:username/:slug(/tree|/blob) 项目页、
 // /share/:id 数字旧链中转盘（见各组件头注释；动态路由必须注册在所有静态路由之后）
 import UserProjectsView from './components/repo/UserProjectsView.vue';
@@ -78,6 +79,8 @@ const router = createRouter({
     { path: '/study', redirect: '/schedule?tab=study' },
     { path: '/team', name: 'team', component: TeamView },
     { path: '/share', name: 'share', component: ShareView },
+    // HTML 文件新标签全屏沙箱预览（bare：无站点导航；鉴权与隔离同内嵌预览）
+    { path: '/share/html/:fid', name: 'share-html-frame', component: HtmlFrameView, meta: { bare: true } },
     // 旧数字详情链：取到项目后 replace 到 /:username/:slug（消息通知/收藏/书签无感迁移）
     { path: '/share/:id', name: 'share-post', component: ShareRedirectView },
     // 报销整理：队长/负责人建项目发邀请码，队员免登录认领填报（可带 ?code=xxx 直达项目）

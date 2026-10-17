@@ -60,6 +60,12 @@ async function newHtmlUrl(f) {
   const typed = b.type === 'text/html' ? b : new Blob([b], { type: 'text/html' });
   return URL.createObjectURL(typed);
 }
+// 新标签全屏预览地址（独立 bare 路由，鉴权/沙箱口径与本页内嵌 iframe 完全一致）
+const frameUrl = computed(() =>
+  props.file
+    ? `/share/html/${props.file.id}?n=${encodeURIComponent(props.file.name)}${isGitee.value ? '&source=gitee' : ''}`
+    : '');
+
 // 切「代码」时懒拉文本（512KB 截断，与普通文本预览同口径）
 async function switchHtmlMode(m) {
   if (htmlMode.value === m) return;
@@ -136,6 +142,8 @@ async function download() {
         <button class="fp-btn" :class="{ on: htmlMode === 'code' }" title="查看 HTML 源码"
           @click="switchHtmlMode('code')">&lt;/&gt; 代码</button>
       </span>
+      <a v-if="kind === 'html'" class="fp-btn" :href="frameUrl" target="_blank" rel="noopener noreferrer"
+        title="在新标签页全屏预览（同样为沙箱隔离）">↗ 新窗口</a>
       <span class="fp-size">{{ fmtSize(file.size) }}</span>
       <a v-if="isGitee && giteeBlobUrl" class="fp-btn" :href="giteeBlobUrl" target="_blank" rel="noopener noreferrer">在 Gitee 打开</a>
       <button class="fp-btn" title="下载" @click="download"><GhIcon name="download" :size="14" /> 下载</button>

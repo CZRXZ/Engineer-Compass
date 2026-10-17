@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import ToolDock from './components/ToolDock.vue';
 import ImageViewer from './components/ImageViewer.vue';
 import RealNameDialog from './components/account/RealNameDialog.vue';
@@ -9,6 +9,9 @@ import { api } from './api.js';
 import { realNameGate, closeGate } from './realNameGate.js';
 
 const router = useRouter();
+const route = useRoute();
+// bare 路由（如 /share/html/:fid 新标签全屏预览）：不挂站点导航与工具栏，页面自身铺满视口
+const bare = computed(() => !!route.meta.bare);
 
 // 实名门禁：填名成功后放行到被拦时想去的路由（无目标则仅关弹窗）
 function onRealNameDone() {
@@ -52,7 +55,7 @@ onMounted(() => applyGhostClass(auth.user?.is_ghost));
       <button class="pw-go" @click="goAccountSecurity">去设置</button>
       <button class="ann-close" aria-label="关闭提醒" @click="pwHidden = true">✕</button>
     </div>
-    <header class="app-header">
+    <header v-if="!bare" class="app-header">
       <div class="brand">
         <h1>🎯 工科竞赛导航 <span>Engineer-Compass</span></h1>
         <p class="sub">84 项 A 类竞赛 · 按月排布 · AI 备赛助手</p>
@@ -81,7 +84,7 @@ onMounted(() => applyGhostClass(auth.user?.is_ghost));
       </div>
     </header>
     <router-view />
-    <ToolDock />
+    <ToolDock v-if="!bare" />
     <ImageViewer />
     <!-- 实名硬门禁全局弹窗（不可关闭；账号安全页另有自己的可关闭实例） -->
     <RealNameDialog :model-value="realNameGate.open" @done="onRealNameDone" />

@@ -276,6 +276,36 @@ try {
   ok('切回网页态：iframe 重新挂载渲染',
     (await page.frameLocator('iframe.fp-html').locator('#t').innerText()) === 'JS_RUN_OK');
 
+  // ===== 4.6 html「新窗口」：bare 全屏路由，无站点导航，沙箱口径与内嵌一致 =====
+  const newWinHref = await page.locator('.fp-head a.fp-btn', { hasText: '新窗口' }).getAttribute('href');
+  ok('工具栏「新窗口」链接指向 /share/html/:fid 且带文件名',
+    /^\/share\/html\/\d+\?n=page\.html$/.test(newWinHref || ''), newWinHref);
+  // 探针直接在当前页打开该地址（等价于 target=_blank 落地页），省去弹窗权限处理
+  await page.goto(`${WEB}${newWinHref}`);
+  await page.waitForLoadState('load');
+  ok('bare 预览页不挂站点导航/工具栏',
+    (await page.locator('.app-header').count()) === 0 && (await page.locator('.dock-fab').count()) === 0);
+  const bareFrame = page.locator('iframe.hf-frame');
+  await bareFrame.waitFor({ state: 'visible', timeout: 10000 });
+  const bSandbox = await bareFrame.getAttribute('sandbox') || '';
+  ok('全屏页 iframe 同为精确沙箱白名单（无 allow-same-origin）',
+    bSandbox === 'allow-scripts allow-popups allow-forms' && !bSandbox.includes('allow-same-origin'), bSandbox);
+  ok('全屏页 iframe 铺满视口（高度远超内嵌的 480px）',
+    (await bareFrame.boundingBox()).height > 600);
+  const bfl = page.frameLocator('iframe.hf-frame');
+  await bfl.locator('#t').waitFor({ timeout: 10000 });
+  ok('全屏页网页被渲染且脚本执行：#t=JS_RUN_OK',
+    (await bfl.locator('#t').innerText()) === 'JS_RUN_OK');
+  ok('全屏页沙箱隔离依旧生效（#iso=ISOLATED，父窗口无 data-xss）',
+    (await bfl.locator('#iso').innerText().catch(() => '')) === 'ISOLATED'
+    && (await page.evaluate(() => document.body.getAttribute('data-xss') || '')) === '');
+  ok('全屏页顶栏显示文件名与下载按钮',
+    (await page.locator('.hf-name').innerText()) === 'page.html'
+    && (await page.locator('.hf-btn', { hasText: '下载' }).count()) === 1);
+  // 回到项目文件页（§5 要点面包屑）
+  await page.goto(`${WEB}${projectUrl}/blob/page.html`);
+  await page.locator('iframe.fp-html').waitFor({ state: 'visible', timeout: 10000 });
+
   // ===== 5. 用户项目主页 =====
   await page.locator('.pv-crumb .pv-seg.owner').click();
   await page.waitForURL(`**/${encodeURIComponent(uA)}`);
