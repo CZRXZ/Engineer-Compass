@@ -1,7 +1,7 @@
 // 小组接口：建组/加入/详情、自定义角色（高自由度权限）、成员管理、小组 AI 备赛计划
 import { Router } from 'express';
 import db from '../db/database.js';
-import { authRequired, teamCtx, hasPerm, requirePerm, genInviteCode, PERM_KEYS, logAudit } from './middleware.js';
+import { authRequired, teamCtx, hasPerm, requirePerm, genInviteCode, PERM_KEYS, logAudit, displayNameOf } from './middleware.js';
 import { callDeepSeek } from './ai.js';
 import { findPhases } from './schedule.js';
 import { sanitizeStars, sanitizeLinks, sanitizeTarget, sanitizeCompletions, deriveMultiDone } from './taskMeta.js';
@@ -154,6 +154,28 @@ r.post('/join', (req, res) => {
     .run(team.id, req.user.id, defaultRole.id);
   logAudit(req, 'team-join', team.name);
   res.status(201).json({ id: team.id, name: team.name, message: `已加入「${team.name}」` });
+});
+
+// GET /api/team/users/search?q=&team_id= — 组长拉人用全站搜人（登录即可；排除自己/封禁，
+// 带 team_id 时再排除已在组的成员）。⚠️ 必须注册在 GET /:id 之前，否则 'users' 会被当 :id
+r.get('/users/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json({ users: [] });
+  const teamId = Number(req.query.team_id) || null;
+  // 带 team_id 时必须是该组成员才可拿「排除已在组」的结果，防借搜索枚举某组都有谁
+  if (teamId) {
+    const ctx = teamCtx(teamId, req.user.id);
+    if (!ctx || !ctx.member) return res.status(403).json({ error: '不是小组成员' });
+  }
+  const like = `%${q}%`;
+  const users = db.prepare(
+    `SELECT id, username, nickname, real_name, avatar FROM user
+     WHERE id != ? AND status != 1
+       ${teamId ? 'AND id NOT IN (SELECT user_id FROM team_member WHERE team_id = ?)' : ''}
+       AND (username LIKE ? OR nickname LIKE ? OR real_name LIKE ?)
+     ORDER BY id LIMIT 10`
+  ).all(...(teamId ? [req.user.id, teamId] : [req.user.id]), like, like, like);
+  res.json({ users });
 });
 
 // GET /api/team/my-tasks — 我的小组任务（个人日程页聚合：我所有小组的完整备赛计划，与小组页同一份 plan_json）
@@ -342,6 +364,62 @@ r.post('/:id/member', (req, res) => {
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   res.json({ message: '已更新成员角色' });
+});
+
+// POST /api/team/:id/member/add — 有「成员管理」权限者（组长恒可）直接把用户拉进组
+// body: { user_ids: number[] }（兼容单值 user_id）。不存在/封禁 → 400；已在组 → 跳过并在响应里列名。
+// 新成员默认挂「组员」角色（与邀请码加入同口径），入组后发 personal_notice 告知。
+r.post('/:id/member/add', (req, res) => {
+  const ctx = teamCtx(Number(req.params.id), req.user.id);
+  const deny = requirePerm(ctx, res, 'member');
+  if (deny) return deny;
+  const raw = req.body || {};
+  const ids = (Array.isArray(raw.user_ids) ? raw.user_ids : (raw.user_id != null ? [raw.user_id] : []))
+    .map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0);
+  if (!ids.length) return res.status(400).json({ error: '请选择要拉入的用户' });
+  if (ids.length > 50) return res.status(400).json({ error: '单次最多拉入 50 人' });
+
+  const uniq = [...new Set(ids)];
+  const users = db.prepare(`SELECT id, username, nickname, real_name, status FROM user WHERE id IN (${uniq.map(() => '?').join(',')})`).all(...uniq);
+  const byId = new Map(users.map((u) => [u.id, u]));
+  const bad = uniq.filter((uid) => !byId.has(uid) || byId.get(uid).status === 1);
+  if (bad.length) return res.status(400).json({ error: '包含不存在或已封禁的用户，已取消操作' });
+
+  const inTeam = new Set(db.prepare(`SELECT user_id FROM team_member WHERE team_id = ? AND user_id IN (${uniq.map(() => '?').join(',')})`)
+    .all(ctx.team.id, ...uniq).map((x) => x.user_id));
+  const targets = uniq.filter((uid) => !inTeam.has(uid));
+  const skipped = users.filter((u) => inTeam.has(u.id)).map((u) => displayNameOf(u));
+  if (!targets.length) return res.status(409).json({ error: '所选用户都已在小组中', skipped });
+
+  const defaultRole = db.prepare("SELECT id FROM team_role WHERE team_id = ? AND name = '组员' ORDER BY level LIMIT 1").get(ctx.team.id);
+  db.exec('BEGIN');
+  try {
+    for (const uid of targets) {
+      // role_id 旧字段恒写 NULL，与邀请码加入同口径（角色以桥表为准）
+      db.prepare('INSERT INTO team_member (team_id, user_id, role_id) VALUES (?,?,NULL)')
+        .run(ctx.team.id, uid);
+      if (defaultRole) db.prepare('INSERT INTO team_member_role (team_id, user_id, role_id) VALUES (?,?,?)')
+        .run(ctx.team.id, uid, defaultRole.id);
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+
+  // 入组通知（COMMIT 后发，失败不影响入组）：同一小组的同类未读通知去重，避免反复拉入刷通知
+  const actor = displayNameOf(req.user);
+  const link = `/team?team=${ctx.team.id}`;
+  try {
+    const exists = db.prepare('SELECT 1 FROM personal_notice WHERE user_id = ? AND type = ? AND link = ? AND is_read = 0');
+    const ins = db.prepare('INSERT INTO personal_notice (user_id, type, title, content, link) VALUES (?,?,?,?,?)');
+    for (const uid of targets) {
+      if (exists.get(uid, 'team_add', link)) continue;
+      ins.run(uid, 'team_add', '你被加入小组', `${actor} 将你加入了小组「${ctx.team.name}」`, link);
+    }
+  } catch { /* 通知失败静默 */ }
+  logAudit(req, 'team-member-add', ctx.team.name, { added: targets });
+  res.status(201).json({
+    message: skipped.length ? `已拉入 ${targets.length} 人，${skipped.length} 人已在组内跳过` : `已拉入 ${targets.length} 人`,
+    added_count: targets.length, skipped,
+  });
 });
 
 // POST /api/team/:id/member/self-role — 成员自选角色（≤3，仅限自己；组长也可自选多角色）

@@ -4,6 +4,7 @@ import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '../../api.js';
+import { displayName } from '../../utils/displayName.js';
 import auth from '../../auth.js';
 
 const router = useRouter();
@@ -50,6 +51,33 @@ async function applyAiGrouping() {
     ElMessage.success(`已应用 AI 分组（${n}/${aiSuggest.value.length} 名成员）`);
   } catch (e) { ElMessage.error(e.message); }
   finally { aiApplying.value = false; }
+}
+
+// —— 组长/有成员管理权限者直接拉人：全站搜索，选中即加入（默认「组员」角色），并发入组通知 ——
+const addDlg = ref(false);
+const addIds = ref([]);
+const addOptions = ref([]);
+const addSearching = ref(false);
+const addSaving = ref(false);
+
+async function searchAdd(q) {
+  if (!q) { addOptions.value = []; return; }
+  addSearching.value = true;
+  try {
+    addOptions.value = (await api.teamUserSearch(q, props.teamId)).users;
+  } finally { addSearching.value = false; }
+}
+
+async function submitAdd() {
+  if (!addIds.value.length) return ElMessage.warning('请先搜索并选择用户');
+  addSaving.value = true;
+  try {
+    const r = await api.teamMemberAdd(props.teamId, addIds.value);
+    ElMessage.success(r.message || '已拉入小组');
+    addDlg.value = false;
+    await reload();
+  } catch (e) { ElMessage.error(e.message); }
+  finally { addSaving.value = false; }
 }
 
 const PERM_KEYS = [
@@ -179,7 +207,11 @@ loadInvite();
     <div class="tm-sec">
       <div class="tm-sec-head">
         <h4>👥 成员（{{ members.length }}）</h4>
-        <el-button v-if="perms.member" size="small" type="primary" plain :loading="aiLoading" @click="aiGrouping">🧠 AI 智能分组</el-button>
+        <span class="tm-head-btns">
+          <el-button v-if="perms.member" size="small" type="primary" plain
+            @click="addIds = []; addOptions = []; addDlg = true">＋ 拉人进组</el-button>
+          <el-button v-if="perms.member" size="small" type="primary" plain :loading="aiLoading" @click="aiGrouping">🧠 AI 智能分组</el-button>
+        </span>
       </div>
       <div v-for="m in members" :key="m.id" class="member-row" :class="{ me: m.is_me }">
         <span class="m-avatar" :title="m.nickname" @click="toProfile(m)">
@@ -221,6 +253,26 @@ loadInvite();
       <template #footer>
         <el-button @click="selfDlg = false">取消</el-button>
         <el-button type="primary" @click="saveSelfRole">保存角色</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 拉人进组弹窗：全站搜索，选中后直接加入（默认组员角色，对方收到通知） -->
+    <el-dialog v-model="addDlg" title="＋ 拉人进组" width="480px" top="20vh">
+      <p class="self-note">搜索用户名 / 昵称 / 真实姓名，选中后直接加入本组，对方会收到通知</p>
+      <el-select v-model="addIds" multiple filterable remote :remote-method="searchAdd"
+        :loading="addSearching" :reserve-keyword="false" style="width:100%"
+        placeholder="输入用户名或昵称搜索（已在组内的同学不会出现）">
+        <el-option v-for="u in addOptions" :key="u.id" :value="u.id"
+          :label="u.username ? `${displayName(u)}（@${u.username}）` : displayName(u)">
+          <span class="add-opt">
+            <el-avatar :size="20" :src="u.avatar || undefined">{{ displayName(u).charAt(0) }}</el-avatar>
+            {{ displayName(u) }} <i v-if="u.username">@{{ u.username }}</i>
+          </span>
+        </el-option>
+      </el-select>
+      <template #footer>
+        <el-button @click="addDlg = false">取消</el-button>
+        <el-button type="primary" :loading="addSaving" @click="submitAdd">加入小组</el-button>
       </template>
     </el-dialog>
 
@@ -337,6 +389,11 @@ loadInvite();
 }
 .owner-actions { margin-top: 12px; }
 .self-note { color: #94a3b8; font-size: 12.5px; margin: 0 0 12px; }
+.tm-head-btns { display: inline-flex; gap: 8px; }
+.add-opt { display: inline-flex; align-items: center; gap: 6px;
+  i { color: var(--text-3); font-style: normal; font-size: 12px; margin-left: 2px; }
+  :deep(.el-avatar) { background: var(--primary); font-size: 11px; }
+}
 .ai-note { color: #94a3b8; font-size: 12.5px; margin: 0 0 12px; }
 .ai-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 8px;
   padding: 8px 12px; margin-bottom: 8px;

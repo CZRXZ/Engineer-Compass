@@ -116,6 +116,9 @@ export const api = {
   teamDetail: (id) => req(`/team/${id}`),
   teamUpdate: (id, card) => req(`/team/${id}`, { method: 'PUT', body: JSON.stringify(card) }),
   teamInvite: (id) => req(`/team/${id}/invite`),
+  // 组长拉人：全站搜人（带 team_id 时后端排除已在组成员），直接加入
+  teamUserSearch: (q, teamId) => req(`/team/users/search?q=${encodeURIComponent(q)}&team_id=${teamId}`),
+  teamMemberAdd: (id, userIds) => req(`/team/${id}/member/add`, { method: 'POST', body: JSON.stringify({ user_ids: userIds }) }),
   teamRoleSave: (id, card) => req(`/team/${id}/role`, { method: 'POST', body: JSON.stringify(card) }),
   teamRoleDelete: (id, rid) => req(`/team/${id}/role/${rid}`, { method: 'DELETE' }),
   teamMemberRole: (id, card) => req(`/team/${id}/member`, { method: 'POST', body: JSON.stringify(card) }),

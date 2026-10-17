@@ -142,6 +142,56 @@ const VID = 'AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tcDJhaXYxAAAAHGZ0eXBtcDQyAAAAAG1wNDJ
   const cm8 = await req('GET', `/team/${team.id}/logs`, null, ta);
   ok(json(cm8).find((x) => x.id === lid).comments.length === 1, '删除后评论数正确');
 
+  // ========== 5. 组长/成员管理员直接拉人进组 ==========
+  console.log('▶ 5 拉人进组');
+  const rd0 = await req('POST', '/auth/register', { username: `p_${N}d`, password: 'pass1234', email: `p_${N}d@test.dev`, nickname: '新人小丁' });
+  const re0 = await req('POST', '/auth/register', { username: `p_${N}e`, password: 'pass1234', email: `p_${N}e@test.dev`, nickname: '外人小戊' });
+  const td = json(rd0).token, te = json(re0).token, idD = json(rd0).user.id, idE = json(re0).user.id;
+  ok(!!td && !!te, '再注册两位用户（被拉对象 / 组外人）');
+  // 搜人：组长带 team_id 搜得到外人，搜不到已在组的 b 和自己
+  const rsx1 = await req('GET', `/team/users/search?q=p_${N}d&team_id=${team.id}`, null, ta);
+  ok(rsx1.status === 200 && json(rsx1).users.some((u) => u.id === idD), '组长搜人：组外新人可搜到');
+  const rsx2 = await req('GET', `/team/users/search?q=p_${N}&team_id=${team.id}`, null, ta);
+  const hit = json(rsx2).users;
+  ok(!hit.some((u) => u.id === json(ra).user.id) && !hit.some((u) => u.id === json(rb).user.id), '搜人：自己与已在组成员被排除');
+  // 组外人带 team_id 搜 → 403（防枚举某组成员）；组外人拉人 → 403
+  const rsx3 = await req('GET', `/team/users/search?q=p_${N}&team_id=${team.id}`, null, te);
+  ok(rsx3.status === 403, '非成员带 team_id 搜索 403');
+  const ra1 = await req('POST', `/team/${team.id}/member/add`, { user_ids: [idE] }, te);
+  ok(ra1.status === 403, '组外人拉人 403');
+  // 普通组员（无 member 权限）拉人 → 403
+  const ra2 = await req('POST', `/team/${team.id}/member/add`, { user_ids: [idE] }, tb);
+  ok(ra2.status === 403, '无成员管理权限的组员拉人 403');
+  // 空名单 400；含不存在用户 → 整单 400 且原子回滚（d 未被加入）
+  const ra3 = await req('POST', `/team/${team.id}/member/add`, { user_ids: [] }, ta);
+  ok(ra3.status === 400, '空名单 400');
+  const ra4 = await req('POST', `/team/${team.id}/member/add`, { user_ids: [idD, 99999999] }, ta);
+  ok(ra4.status === 400, '含不存在用户整单 400');
+  const det0 = json(await req('GET', `/team/${team.id}`, null, ta));
+  ok(!det0.members.some((m) => m.id === idD), '400 整单原子回滚（d 未入组）');
+  // 正式批量拉入：d 未在组加入，b 已在组跳过 → 201、added_count=1、skipped 1
+  const ra5 = await req('POST', `/team/${team.id}/member/add`, { user_ids: [idD, json(rb).user.id] }, ta);
+  ok(ra5.status === 201 && json(ra5).added_count === 1 && json(ra5).skipped.length === 1,
+    '批量拉入：1 人加入、1 人已在组跳过', JSON.stringify(ra5.data));
+  const det1 = json(await req('GET', `/team/${team.id}`, null, ta));
+  const md = det1.members.find((m) => m.id === idD);
+  ok(!!md && (md.role_names || []).includes('组员'), 'd 已在组且默认挂「组员」角色');
+  // 重复拉 d → 409
+  const ra6 = await req('POST', `/team/${team.id}/member/add`, { user_id: idD }, ta);
+  ok(ra6.status === 409, '全员已在组 → 409（同时兼容单值 user_id）');
+  // 单值 user_id 拉 e 成功，e 收到 team_add 通知（link 指向 /team?team=）
+  const ra7 = await req('POST', `/team/${team.id}/member/add`, { user_id: idE }, ta);
+  ok(ra7.status === 201 && json(ra7).added_count === 1, '单值 user_id 拉入 e 成功');
+  const notices = json(await req('GET', '/notifications/personal', null, te));
+  const n = notices.rows.find((x) => x.type === 'team_add');
+  ok(!!n && n.link === `/team?team=${team.id}` && n.content.includes(team.name), '被拉者收到入组通知（带小组名与跳转链接）', JSON.stringify(n));
+  // 再拉一次 e 不产生第二条未读通知（同组同类未读去重）
+  await req('DELETE', `/team/${team.id}/member/${idE}`, null, ta);
+  await req('POST', `/team/${team.id}/member/add`, { user_id: idE }, ta);
+  const notices2 = json(await req('GET', '/notifications/personal', null, te));
+  const list2 = notices2.rows;
+  ok(list2.filter((x) => x.type === 'team_add' && x.link === `/team?team=${team.id}` && !x.is_read).length === 1, '同组重复拉入不刷通知');
+
   // ========== 清理 ==========
   console.log('▶ 清理');
   const rd1 = await req('DELETE', `/team/${team.id}`, null, ta);
